@@ -1,0 +1,1506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PIRL DOL Error Report Inspector</title>
+    <!-- Google Fonts: Outfit & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* Theme Definitions */
+        :root, body[data-theme="dark"] {
+            --bg-body: #0f172a;
+            --bg-card: #1e293b;
+            --bg-card-hover: #334155;
+            --bg-input: #0f172a;
+            --border-color: #334155;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --danger: #f43f5e;
+            --danger-bg: rgba(244, 63, 94, 0.15);
+            --warning: #f59e0b;
+            --warning-bg: rgba(245, 158, 11, 0.15);
+            --success: #10b981;
+            --success-bg: rgba(16, 185, 129, 0.15);
+            --radius-lg: 16px;
+            --radius-md: 10px;
+            --radius-sm: 6px;
+            --shadow-glow: 0 10px 30px -10px rgba(99, 102, 241, 0.3);
+        }
+
+        body[data-theme="medium"] {
+            --bg-body: #1e293b;
+            --bg-card: #334155;
+            --bg-card-hover: #475569;
+            --bg-input: #1e293b;
+            --border-color: #475569;
+            --text-main: #f8fafc;
+            --text-muted: #cbd5e1;
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --danger: #fb7185;
+            --danger-bg: rgba(244, 63, 94, 0.2);
+            --warning: #fbbf24;
+            --warning-bg: rgba(245, 158, 11, 0.2);
+            --success: #34d399;
+            --success-bg: rgba(16, 185, 129, 0.2);
+        }
+
+        body[data-theme="light"] {
+            --bg-body: #f1f5f9;
+            --bg-card: #ffffff;
+            --bg-card-hover: #f8fafc;
+            --bg-input: #ffffff;
+            --border-color: #cbd5e1;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --danger: #e11d48;
+            --danger-bg: rgba(225, 29, 72, 0.1);
+            --warning: #d97706;
+            --warning-bg: rgba(217, 119, 6, 0.1);
+            --success: #059669;
+            --success-bg: rgba(5, 150, 105, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 24px;
+            line-height: 1.5;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(30, 41, 59, 0.85);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border-color);
+            padding: 20px 32px;
+            border-radius: var(--radius-lg);
+            margin-bottom: 24px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .header-icon {
+            width: 44px;
+            height: 44px;
+            background: linear-gradient(135deg, var(--primary), #818cf8);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            box-shadow: var(--shadow-glow);
+        }
+
+        h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.6rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            background: linear-gradient(135deg, #ffffff, #cbd5e1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header-meta {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .badge-privacy {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(16, 185, 129, 0.12);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: var(--success);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.82rem;
+            font-weight: 500;
+        }
+
+        .badge-schema {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(99, 102, 241, 0.12);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            color: #a5b4fc;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.82rem;
+            font-weight: 500;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+
+        /* Dropzone Section */
+        .upload-section {
+            background: var(--bg-card);
+            border: 2px dashed var(--border-color);
+            border-radius: var(--radius-lg);
+            padding: 28px;
+            text-align: center;
+            transition: all 0.25s ease;
+        }
+
+        .upload-section.dragover {
+            border-color: var(--primary);
+            background: rgba(99, 102, 241, 0.08);
+        }
+
+        .dropzone-icon {
+            font-size: 2.5rem;
+            margin-bottom: 8px;
+            color: var(--primary);
+        }
+
+        .dropzone-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .dropzone-subtitle {
+            color: var(--text-muted);
+            font-size: 0.88rem;
+            margin-bottom: 16px;
+        }
+
+        .upload-inputs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 14px;
+            margin-top: 16px;
+        }
+
+        .upload-box {
+            background: var(--bg-body);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 14px;
+            text-align: left;
+        }
+
+        .upload-box label {
+            display: block;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .upload-box input[type="file"] {
+            width: 100%;
+            font-size: 0.84rem;
+            color: var(--text-muted);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 16px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--primary);
+            color: #fff;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            font-size: 0.88rem;
+            padding: 10px 20px;
+            border-radius: var(--radius-md);
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.25);
+        }
+
+        .btn:hover {
+            background: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        .btn-secondary {
+            background: #334155;
+            box-shadow: none;
+        }
+
+        .btn-secondary:hover {
+            background: #475569;
+        }
+
+        .btn-success {
+            background: #10b981;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.25);
+        }
+
+        .btn-success:hover {
+            background: #059669;
+        }
+
+        /* View Mode Switcher Tabs */
+        .mode-switcher {
+            display: flex;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 6px;
+            gap: 8px;
+        }
+
+        .mode-tab {
+            flex: 1;
+            padding: 12px 20px;
+            border-radius: var(--radius-sm);
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-family: 'Outfit', sans-serif;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .mode-tab.active {
+            background: var(--primary);
+            color: #ffffff;
+            box-shadow: var(--shadow-glow);
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 18px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+        }
+
+        .stat-icon.records { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
+        .stat-icon.errors { background: rgba(244, 63, 94, 0.15); color: #f43f5e; }
+        .stat-icon.affected { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+        .stat-icon.schema { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+
+        .stat-info .stat-value {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.4rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .stat-info .stat-label {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        /* Common Column Search & Toolbar */
+        .toolbar {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .common-filters-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+        }
+
+        .filter-input-group label {
+            display: block;
+            font-size: 0.76rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        .filter-input-group input, .filter-input-group select {
+            width: 100%;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 8px 12px;
+            color: var(--text-main);
+            font-size: 0.85rem;
+            outline: none;
+        }
+
+        .filter-input-group input:focus, .filter-input-group select:focus {
+            border-color: var(--primary);
+        }
+
+        .toolbar-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        /* Table Card */
+        .table-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        }
+
+        .table-wrapper {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.88rem;
+        }
+
+        thead {
+            background: rgba(15, 23, 42, 0.8);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            padding: 14px 16px;
+            font-weight: 600;
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+        }
+
+        tbody tr {
+            border-bottom: 1px solid var(--border-color);
+            transition: background-color 0.15s ease;
+        }
+
+        tbody tr:hover {
+            background-color: var(--bg-card-hover);
+        }
+
+        tbody tr.has-error-row {
+            background-color: rgba(244, 63, 94, 0.06);
+        }
+
+        td {
+            padding: 12px 16px;
+            vertical-align: middle;
+            white-space: nowrap;
+        }
+
+        .code-pill {
+            font-family: monospace;
+            font-size: 0.8rem;
+            background: rgba(99, 102, 241, 0.12);
+            color: #a5b4fc;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid rgba(99, 102, 241, 0.2);
+        }
+
+        .val-pill {
+            font-family: monospace;
+            font-size: 0.82rem;
+            background: rgba(244, 63, 94, 0.1);
+            color: #fda4af;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid rgba(244, 63, 94, 0.2);
+            max-width: 180px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: inline-block;
+        }
+
+        .severity-badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .severity-badge.error { background: var(--danger-bg); color: var(--danger); border: 1px solid rgba(244, 63, 94, 0.3); }
+        .severity-badge.warning { background: var(--warning-bg); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
+
+        .btn-inspect {
+            background: rgba(99, 102, 241, 0.15);
+            color: #a5b4fc;
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            padding: 5px 12px;
+            border-radius: var(--radius-sm);
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-inspect:hover {
+            background: var(--primary);
+            color: #fff;
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            background: var(--bg-card);
+            border-top: 1px solid var(--border-color);
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .pagination-btns {
+            display: flex;
+            gap: 8px;
+        }
+
+        /* Modal Overlay */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(15, 23, 42, 0.82);
+            backdrop-filter: blur(8px);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 24px;
+        }
+
+        .modal-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg);
+            width: 100%;
+            max-width: 1100px;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+
+        .modal-header {
+            padding: 20px 28px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-title {
+            font-family: 'Outfit', sans-serif;
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        .modal-close:hover { color: #fff; }
+
+        .modal-tabs {
+            display: flex;
+            gap: 12px;
+            padding: 12px 28px;
+            background: rgba(15, 23, 42, 0.5);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .modal-tab {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.82rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            cursor: pointer;
+            background: transparent;
+            border: 1px solid transparent;
+        }
+
+        .modal-tab.active {
+            background: rgba(99, 102, 241, 0.15);
+            color: #a5b4fc;
+            border-color: rgba(99, 102, 241, 0.3);
+        }
+
+        .modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .fields-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 12px;
+        }
+
+        .field-card {
+            background: var(--bg-body);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 12px;
+        }
+
+        .field-card.error {
+            border-color: rgba(244, 63, 94, 0.5);
+            background: rgba(244, 63, 94, 0.05);
+        }
+
+        .field-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .field-name {
+            font-weight: 600;
+            font-size: 0.84rem;
+            color: var(--text-main);
+            margin-bottom: 6px;
+        }
+
+        .field-val-container {
+            display: flex;
+            gap: 8px;
+        }
+
+        .field-input {
+            flex: 1;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-main);
+            font-family: monospace;
+            font-size: 0.85rem;
+            padding: 4px 8px;
+        }
+
+        .field-input:focus { border-color: var(--primary); }
+
+        .btn-save-cell {
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 0.78rem;
+            cursor: pointer;
+        }
+
+        .field-error-msg {
+            margin-top: 8px;
+            font-size: 0.78rem;
+            color: var(--danger);
+            background: var(--danger-bg);
+            padding: 6px 10px;
+            border-radius: 4px;
+            border-left: 3px solid var(--danger);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 48px;
+            color: var(--text-muted);
+        }
+
+        /* Paste Modal Textarea */
+        .paste-textarea {
+            width: 100%;
+            height: 250px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            color: var(--text-main);
+            font-family: monospace;
+            padding: 14px;
+            font-size: 0.88rem;
+            outline: none;
+            resize: vertical;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="header-title">
+                <div class="header-icon">📊</div>
+                <div>
+                    <h1>PIRL DOL Error Report Inspector</h1>
+                    <div style="font-size: 0.84rem; color: var(--text-muted);">ETA 9172 Participant Individual Record Layout Validation & Correction Tool</div>
+                </div>
+            </div>
+            <div class="header-meta">
+                <select id="themeSelector" onchange="changeTheme(this.value)" style="background:var(--bg-card); border:1px solid var(--border-color); color:var(--text-main); padding:6px 14px; border-radius:20px; font-size:0.82rem; cursor:pointer; outline:none;">
+                    <option value="dark">🌙 Dark Mode</option>
+                    <option value="medium">🌗 Medium Mode</option>
+                </select>
+                <div class="badge-privacy">🔒 Local Memory Only</div>
+                <div class="badge-schema" id="schemaBadge">📋 Schema: {{ schema_column_count }} Elements Mapped</div>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn btn-secondary" onclick="saveFileToFolder()" title="Save changes directly back to your CSV file on disk in its original format">💾 Save to File</button>
+                    <button class="btn btn-secondary" onclick="exportPirlWithHeaders('xlsx')" title="Export full 495-column dataset with element header names for reporting">📊 Full Dataset (.xlsx)</button>
+                    <button class="btn btn-success" onclick="exportHeaderlessPirl()" title="Download corrected CSV file in exact original format">📥 Export WIPS File (wp_pirl.csv)</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Dropzone Section -->
+        <div class="upload-section" id="dropzone">
+            <div class="dropzone-icon">✈️</div>
+            <div class="dropzone-title">PIRL Dataset Inspector & WIPS Preflight Validation</div>
+            <div class="dropzone-subtitle">Run automatic preflight discrepancy checks or paste WIPS error results directly from the DOL portal</div>
+
+            <div class="upload-inputs-grid" style="grid-template-columns: 1fr 1fr;">
+                <div class="upload-box">
+                    <label>1. PIRL Data File (.csv - 22_FULL_PIRL / wp_pirl)</label>
+                    <input type="file" id="pirlFileInput" accept=".csv">
+                </div>
+                <div class="upload-box">
+                    <label>2. PIRL Schema Header (PIRL Schema Header.csv)</label>
+                    <input type="file" id="schemaFileInput" accept=".csv">
+                </div>
+            </div>
+
+            <div class="btn-group" style="margin-top: 14px;">
+                <button class="btn" style="background: linear-gradient(135deg, #2563eb, #3b82f6); font-weight:700;" onclick="runPreflightCheck()">✈️ Preflight WIPS Check</button>
+                <button class="btn btn-secondary" onclick="openPasteModal()">📋 Paste WIPS Text Errors</button>
+                <button class="btn btn-secondary" id="uploadBtn" onclick="uploadFiles()">🚀 Load / Refresh Dataset</button>
+            </div>
+        </div>
+
+        <!-- Mode Switcher -->
+        <div class="mode-switcher">
+            <button class="mode-tab active" id="tabModeErrors" onclick="switchViewMode('errors')">
+                ⚠️ DOL Errors View (<span id="countErrorsBadge">0</span>)
+            </button>
+            <button class="mode-tab" id="tabModeTable" onclick="switchViewMode('table')">
+                📊 Reconstructed PIRL Table View (<span id="countRecordsBadge">0</span>)
+            </button>
+        </div>
+
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon records">👥</div>
+                <div class="stat-info">
+                    <div class="stat-value" id="statRecords">0</div>
+                    <div class="stat-label">Total PIRL Records</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon errors">🚨</div>
+                <div class="stat-info">
+                    <div class="stat-value" id="statErrors">0</div>
+                    <div class="stat-label">Total Validation Errors</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon affected">⚠️</div>
+                <div class="stat-info">
+                    <div class="stat-value" id="statAffected">0</div>
+                    <div class="stat-label">Affected Participants</div>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon schema">📋</div>
+                <div class="stat-info">
+                    <div class="stat-value" id="statSchema">{{ schema_column_count }}</div>
+                    <div class="stat-label">Mapped Schema Columns</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Area -->
+        <div id="viewErrorsSection">
+            <div class="toolbar">
+                <div class="search-bar-grid">
+                    <div class="filter-input-group" style="flex:2;">
+                        <label>Global Error Search</label>
+                        <input type="text" id="filterGlobal" placeholder="Search by participant ID, element name, error code, or message..." oninput="debounceSearch()">
+                    </div>
+                    <div class="filter-input-group" style="flex:1;">
+                        <label>Filter by Element</label>
+                        <input type="text" id="elementFilterInput" placeholder="Elem # or name..." oninput="debounceSearch()">
+                    </div>
+                    <div class="filter-input-group" style="flex:1;">
+                        <label>Filter by Severity</label>
+                        <select id="severityFilter" onchange="debounceSearch()">
+                            <option value="">All Severities</option>
+                            <option value="Error">Error Only</option>
+                            <option value="Warning">Warning Only</option>
+                        </select>
+                    </div>
+                    <div style="display:flex; align-items:flex-end; gap:8px;">
+                        <button class="btn btn-secondary" onclick="exportErrorList('csv')">📥 Export CSV</button>
+                        <button class="btn btn-secondary" onclick="exportErrorList('xlsx')">📊 Export Excel</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active WIPS Edit Check Rule Banner -->
+            <div id="ruleHeaderContainer" style="display:none; background: var(--card-bg); border: 1px solid rgba(239, 68, 68, 0.3); border-left: 4px solid var(--danger); padding: 14px 18px; border-radius: 8px; margin-bottom: 16px;">
+                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">
+                    <div style="flex:1; min-width:280px;">
+                        <div style="font-weight: 700; color: #f87171; font-size: 0.95rem; display: flex; align-items: center; gap: 8px;">
+                            <span>🚨 Active Edit Check Rule</span>
+                            <span id="ruleCodeBadge" class="code-pill">WIPS_ELEM_200</span>
+                        </div>
+                        <div id="ruleTextDescription" style="font-size: 0.88rem; margin-top: 4px; color: var(--text-main); font-weight: 500; line-height: 1.4;"></div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-size: 1.05rem; font-weight: bold; color: var(--text-main);" id="ruleGroupCount">0 Conflicting Groups</div>
+                        <div style="font-size: 0.78rem; color: var(--text-muted);">Grouped by Participant ID (UIID)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="table-card">
+                <div class="table-wrapper">
+                    <table>
+                        <thead id="mainTableHead"></thead>
+                        <tbody id="mainTableBody">
+                            <tr><td colspan="8" class="empty-state">No DOL errors loaded yet. Upload data files or click <strong>📋 Paste WIPS Text Errors</strong>.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pagination-bar">
+                    <div id="paginationInfo">Showing 0 - 0 records</div>
+                    <div style="display:flex; gap:8px;">
+                        <button class="btn btn-secondary" id="prevPageBtn" onclick="changePage(-1)">Previous</button>
+                        <button class="btn btn-secondary" id="nextPageBtn" onclick="changePage(1)">Next</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="viewTableSection" style="display:none;">
+            <div class="toolbar">
+                <div class="common-filters-grid">
+                    <div class="filter-input-group">
+                        <label>Unique ID (Elem 100)</label>
+                        <input type="text" id="filterUiid" placeholder="Filter UIID..." oninput="debounceSearch()">
+                    </div>
+                    <div class="filter-input-group">
+                        <label>State Code (Elem 101)</label>
+                        <input type="text" id="filterState" placeholder="Filter State..." oninput="debounceSearch()">
+                    </div>
+                    <div class="filter-input-group">
+                        <label>Date of Birth (Elem 200)</label>
+                        <input type="text" id="filterDob" placeholder="YYYYMMDD..." oninput="debounceSearch()">
+                    </div>
+                    <div class="filter-input-group">
+                        <label>Veteran Status (Elem 300)</label>
+                        <select id="filterVeteran" onchange="debounceSearch()">
+                            <option value="">All</option>
+                            <option value="1">1 - Yes (Veteran)</option>
+                            <option value="0">0 - No / Non-Veteran</option>
+                        </select>
+                    </div>
+                    <div class="filter-input-group">
+                        <label>Disability (Elem 202)</label>
+                        <select id="filterDisability" onchange="debounceSearch()">
+                            <option value="">All</option>
+                            <option value="1">1 - Yes (Disability)</option>
+                            <option value="0">0 - No / None</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Record Inspector Modal -->
+    <div class="modal-overlay" id="recordModal">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div>
+                    <div class="modal-title" id="modalTitle">Participant Record Inspector</div>
+                    <div style="font-size: 0.84rem; color: var(--text-muted);" id="modalSubTitle"></div>
+                </div>
+                <button class="modal-close" onclick="closeModal('recordModal')">✕</button>
+            </div>
+            <div class="modal-tabs">
+                <button class="modal-tab active" id="tabErrorsOnly" onclick="setModalTab('errors')">Failing Fields Only (<span id="modalErrCount">0</span>)</button>
+                <button class="modal-tab" id="tabAllFields" onclick="setModalTab('all')">All Mapped PIRL Fields (<span id="modalAllCount">0</span>)</button>
+            </div>
+            <div class="modal-body">
+                <div class="fields-grid" id="modalFieldsGrid"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Paste WIPS Errors Modal -->
+    <div class="modal-overlay" id="pasteModal">
+        <div class="modal-card" style="max-width: 700px;">
+            <div class="modal-header">
+                <div class="modal-title">Paste Raw WIPS Edit Check Error Text</div>
+                <button class="modal-close" onclick="closeModal('pasteModal')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div style="font-size: 0.86rem; color: var(--text-muted); margin-bottom: 12px;">
+                    Copy error text from your WIPS web page results (Step 3 in WIPS process guide) and paste it below:
+                </div>
+                <textarea class="paste-textarea" id="pasteTextarea" placeholder="Paste WIPS error lines here... E.g.
+Row 5: Element 200 - Invalid DOB 00000000
+Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textarea>
+                <div style="margin-top: 16px; text-align: right;">
+                    <button class="btn" onclick="submitPastedErrors()">Process WIPS Errors</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentMode = 'errors'; // 'errors' or 'table'
+        let currentPage = 1;
+        let pageSize = 50;
+        let searchTimeout = null;
+        let currentRecordData = null;
+        let activeModalTab = 'errors';
+
+        const dropzone = document.getElementById('dropzone');
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            if (dropzone) dropzone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
+        });
+
+        if (dropzone) {
+            ['dragenter', 'dragover'].forEach(eventName => dropzone.addEventListener(eventName, () => dropzone.classList.add('dragover'), false));
+            ['dragleave', 'drop'].forEach(eventName => dropzone.addEventListener(eventName, () => dropzone.classList.remove('dragover'), false));
+
+            dropzone.addEventListener('drop', e => {
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    for (let file of files) {
+                        const name = file.name.toLowerCase();
+                        if ((name.includes('pirl') || name.includes('22_full_pirl')) && !name.includes('header') && !name.includes('error')) assignFileInput('pirlFileInput', file);
+                        else if (name.includes('error') || name.includes('edit') || name.includes('log') || name.endsWith('.xlsx')) assignFileInput('errorFileInput', file);
+                        else if (name.includes('header') || name.includes('schema')) assignFileInput('schemaFileInput', file);
+                        else assignFileInput('pirlFileInput', file);
+                    }
+                    uploadFiles();
+                }
+            });
+        }
+
+        function assignFileInput(inputId, file) {
+            const el = document.getElementById(inputId);
+            if (!el) return;
+            const container = new DataTransfer();
+            container.items.add(file);
+            el.files = container.files;
+        }
+
+        async function uploadFiles() {
+            const pirlInput = document.getElementById('pirlFileInput');
+            const errorInput = document.getElementById('errorFileInput');
+            const schemaInput = document.getElementById('schemaFileInput');
+
+            if ((!pirlInput || !pirlInput.files[0]) && (!errorInput || !errorInput.files[0]) && (!schemaInput || !schemaInput.files[0])) {
+                alert("Please select or drop a PIRL Data file or DOL Error Report file.");
+                return;
+            }
+
+            const formData = new FormData();
+            if (pirlInput && pirlInput.files[0]) formData.append('pirl_file', pirlInput.files[0]);
+            if (errorInput && errorInput.files[0]) formData.append('error_file', errorInput.files[0]);
+            if (schemaInput && schemaInput.files[0]) formData.append('schema_file', schemaInput.files[0]);
+
+            const uploadBtn = document.getElementById('uploadBtn');
+            if (uploadBtn) { uploadBtn.innerHTML = '⏳ Processing...'; uploadBtn.disabled = true; }
+
+            try {
+                const res = await fetch('/api/upload', { method: 'POST', body: formData });
+                const data = await res.json();
+                updateStats(data.stats);
+                currentPage = 1;
+                await fetchCurrentViewData();
+            } catch (err) {
+                alert("Error processing uploaded files: " + err);
+            } finally {
+                if (uploadBtn) { uploadBtn.innerHTML = '🚀 Inspect & Match Errors'; uploadBtn.disabled = false; }
+            }
+        }
+
+        async function loadDemoData() {
+            try {
+                const res = await fetch('/api/demo', { method: 'POST' });
+                const data = await res.json();
+                updateStats(data.stats);
+                currentPage = 1;
+                await fetchCurrentViewData();
+            } catch (err) {
+                alert("Error loading demo: " + err);
+            }
+        }
+
+        function getElValue(id) {
+            const el = document.getElementById(id);
+            return el ? el.value : "";
+        }
+
+        function setElText(id, text) {
+            const el = document.getElementById(id);
+            if (el) el.innerText = text;
+        }
+
+        function updateStats(stats) {
+            if (!stats) return;
+            setElText('statRecords', (stats.total_pirl_records || 0).toLocaleString());
+            setElText('statErrors', (stats.total_errors || 0).toLocaleString());
+            setElText('statTotalErrors', (stats.total_errors || 0).toLocaleString());
+            setElText('statAffected', (stats.affected_participants || 0).toLocaleString());
+            setElText('statSchema', (stats.schema_column_count || 0).toLocaleString());
+            setElText('statSchemaCols', (stats.schema_column_count || 0).toLocaleString());
+            
+            setElText('countErrorsBadge', (stats.total_errors || 0).toLocaleString());
+            setElText('countRecordsBadge', (stats.total_pirl_records || 0).toLocaleString());
+            setElText('schemaBadge', `📋 Schema: ${stats.schema_column_count || 0} Elements Mapped`);
+        }
+
+        function switchViewMode(mode) {
+            currentMode = mode;
+            const secErrors = document.getElementById('viewErrorsSection');
+            const secTable = document.getElementById('viewTableSection');
+            const tabErr = document.getElementById('tabModeErrors');
+            const tabTab = document.getElementById('tabModeTable');
+
+            if (mode === 'errors') {
+                if (tabErr) tabErr.classList.add('active');
+                if (tabTab) tabTab.classList.remove('active');
+                if (secErrors) secErrors.style.display = 'block';
+                if (secTable) secTable.style.display = 'none';
+            } else {
+                if (tabTab) tabTab.classList.add('active');
+                if (tabErr) tabErr.classList.remove('active');
+                if (secErrors) secErrors.style.display = 'none';
+                if (secTable) secTable.style.display = 'block';
+            }
+            currentPage = 1;
+            fetchCurrentViewData();
+        }
+
+        function debounceSearch() {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                currentPage = 1;
+                fetchCurrentViewData();
+            }, 300);
+        }
+
+        async function fetchCurrentViewData() {
+            if (currentMode === 'errors') await fetchErrors();
+            else await fetchPirlTable();
+        }
+
+        async function fetchErrors() {
+            const q = getElValue('filterGlobal');
+            const elem = getElValue('elementFilterInput');
+            const sev = getElValue('severityFilter');
+
+            const url = `/api/errors?query=${encodeURIComponent(q)}&element=${encodeURIComponent(elem)}&severity=${encodeURIComponent(sev)}&page=${currentPage}&page_size=${pageSize}`;
+            
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                renderErrorsTable(data);
+            } catch (err) { console.error("Error fetching errors:", err); }
+        }
+
+        function renderErrorsTable(data) {
+            const thead = document.getElementById('mainTableHead');
+            const tbody = document.getElementById('mainTableBody');
+            const ruleBanner = document.getElementById('ruleHeaderContainer');
+            if (!tbody) return;
+
+            if (!data.errors || data.errors.length === 0) {
+                if (ruleBanner) ruleBanner.style.display = 'none';
+                tbody.innerHTML = `<tr><td colspan="8" class="empty-state">No matching WIPS errors found for current filters.</td></tr>`;
+                setElText('paginationInfo', "Showing 0 - 0 of 0 errors");
+                const pPrev = document.getElementById('prevPageBtn'); if (pPrev) pPrev.disabled = true;
+                const pNext = document.getElementById('nextPageBtn'); if (pNext) pNext.disabled = true;
+                return;
+            }
+
+            // Extract primary rule message (e.g. Rule 200) to show ONCE in the top banner
+            const primaryRule = data.errors[0].error_message || "Validation Error";
+            const primaryCode = data.errors[0].error_code || "WIPS_ERR";
+            if (ruleBanner) {
+                ruleBanner.style.display = 'block';
+                setElText('ruleCodeBadge', primaryCode);
+                setElText('ruleTextDescription', primaryRule);
+                
+                const uniqueUiids = new Set(data.errors.map(e => e.uiid).filter(Boolean));
+                setElText('ruleGroupCount', `${uniqueUiids.size} Participant Pair(s) (${data.total_errors} Rows Total)`);
+            }
+
+            if (thead) {
+                thead.innerHTML = `
+                    <tr>
+                        <th style="width: 80px;">PIRL Row #</th>
+                        <th style="width: 150px;">User ID (Elem 100)</th>
+                        <th>PIRL Element & Value</th>
+                        <th style="width: 130px;">Entry Date (900)</th>
+                        <th style="width: 130px;">Exit Date (901)</th>
+                        <th style="width: 130px;">School Status (409)</th>
+                        <th style="width: 70px;">State</th>
+                        <th style="width: 120px;">Action</th>
+                    </tr>
+                `;
+            }
+
+            // Group errors by UIID so pairs appear together
+            const groupedMap = new Map();
+            data.errors.forEach(err => {
+                const key = err.uiid || `row_${err.row_number}`;
+                if (!groupedMap.has(key)) groupedMap.set(key, []);
+                groupedMap.get(key).push(err);
+            });
+
+            let htmlRows = [];
+            let groupIndex = 0;
+
+            groupedMap.forEach((errGroup, uiidKey) => {
+                const isGroup = errGroup.length > 1;
+                const groupBg = groupIndex % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent';
+                
+                if (isGroup) {
+                    htmlRows.push(`
+                        <tr style="background: rgba(59, 130, 246, 0.12); border-top: 2px solid rgba(59, 130, 246, 0.5);">
+                            <td colspan="8" style="padding: 8px 14px;">
+                                <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                                    <div style="font-weight: 700; color: #60a5fa; font-size: 0.9rem; display: flex; align-items: center; gap: 8px;">
+                                        <span>👤 Participant ID (Elem 100):</span>
+                                        <code style="font-size: 0.95rem; background: rgba(0,0,0,0.3); padding: 2px 8px; border-radius: 4px; color: #93c5fd;">${uiidKey}</code>
+                                    </div>
+                                    <div style="font-size: 0.78rem; font-weight: 600; color: #f87171; background: rgba(239,68,68,0.18); border: 1px solid rgba(239,68,68,0.35); padding: 2px 10px; border-radius: 12px;">
+                                        ⚠️ ${errGroup.length} Conflicting Records Paired
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                    `);
+                }
+
+                errGroup.forEach((err, idx) => {
+                    const valBadgeStyle = err.element_number === '200' ? 
+                        `background: rgba(239, 68, 68, 0.2); color: #f87171; font-weight: 700; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 4px; display: inline-block; font-family: monospace;` :
+                        `background: rgba(245, 158, 11, 0.2); color: #fbbf24; font-weight: 700; border: 1px solid rgba(245,158,11,0.4); padding: 3px 8px; border-radius: 4px; display: inline-block; font-family: monospace;`;
+
+                    const schoolStatusLabel = err.school_status ? 
+                        (err.school_status === '5' ? '5 - Sec. Grad' : err.school_status === '1' ? '1 - Attending' : 'Code ' + err.school_status) : 
+                        '<span style="color:var(--text-muted);">(blank)</span>';
+
+                    htmlRows.push(`
+                        <tr class="has-error-row" style="background: ${groupBg};">
+                            <td><strong>#${err.row_number || (err.pirl_row_index !== null ? err.pirl_row_index + 1 : 'N/A')}</strong></td>
+                            <td>
+                                <div style="font-weight: 700; color: var(--accent); display: flex; align-items: center; gap: 4px;">
+                                    <span>👤</span> <code>${err.uiid || 'N/A'}</code>
+                                </div>
+                                ${isGroup ? `<div style="font-size: 0.72rem; color: #f87171; font-weight: 600;">Record #${idx + 1} of ${errGroup.length}</div>` : ''}
+                            </td>
+                            <td>
+                                <div style="font-size: 0.78rem; color: var(--text-muted); font-weight: 600; margin-bottom: 2px;">${err.element_col_name || err.element}</div>
+                                <div style="display:flex; align-items:center; gap:6px;">
+                                    <span style="${valBadgeStyle}" title="${err.current_value || '(blank)'}">${err.current_value || '(blank / missing)'}</span>
+                                    ${err.current_value ? `<button style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:var(--text-main); font-size:0.72rem; padding:2px 8px; border-radius:4px; cursor:pointer;" onclick="copyValueToClipboard('${err.current_value}')" title="Copy value to buffer and clipboard">📋 Copy</button>` : ''}
+                                </div>
+                            </td>
+                            <td><span style="font-family: monospace;">${err.entry_date || '<span style="color:var(--text-muted);">(blank)</span>'}</span></td>
+                            <td><span style="font-family: monospace;">${err.exit_date || '<span style="color:var(--text-muted);">(blank)</span>'}</span></td>
+                            <td><span style="font-size: 0.84rem;">${schoolStatusLabel}</span></td>
+                            <td><strong>${err.state_code || 'LA'}</strong></td>
+                            <td>
+                                ${err.pirl_row_index !== null ? 
+                                    `<button class="btn-inspect" onclick="inspectRecord(${err.pirl_row_index})">Inspect / Edit 🔍</button>` : 
+                                    `<span style="color:var(--text-muted); font-size:0.78rem;">Unlinked</span>`}
+                            </td>
+                        </tr>
+                    `);
+                });
+                groupIndex++;
+            });
+
+            tbody.innerHTML = htmlRows.join('');
+
+            const start = (data.page - 1) * data.page_size + 1;
+            const end = Math.min(data.page * data.page_size, data.total_errors);
+            setElText('paginationInfo', `Showing ${start} - ${end} of ${data.total_errors} errors (Page ${data.page} of ${data.total_pages})`);
+            
+            const pPrev = document.getElementById('prevPageBtn'); if (pPrev) pPrev.disabled = data.page <= 1;
+            const pNext = document.getElementById('nextPageBtn'); if (pNext) pNext.disabled = data.page >= data.total_pages;
+        }
+
+        async function fetchPirlTable() {
+            const q = getElValue('filterGlobal');
+            const uiid = getElValue('filterUiid');
+            const state_id = getElValue('filterState');
+            const dob = getElValue('filterDob');
+            const veteran = getElValue('filterVeteran');
+            const disability = getElValue('filterDisability');
+
+            const url = `/api/pirl-data?query=${encodeURIComponent(q)}&uiid=${encodeURIComponent(uiid)}&state_id=${encodeURIComponent(state_id)}&dob=${encodeURIComponent(dob)}&veteran=${encodeURIComponent(veteran)}&disability=${encodeURIComponent(disability)}&page=${currentPage}&page_size=${pageSize}`;
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                renderPirlTable(data);
+            } catch (err) { console.error("Error fetching PIRL table:", err); }
+        }
+
+        function renderPirlTable(data) {
+            const thead = document.getElementById('mainTableHead');
+            const tbody = document.getElementById('mainTableBody');
+            if (!tbody) return;
+
+            if (thead) {
+                thead.innerHTML = `
+                    <tr>
+                        <th style="width: 70px;">Row #</th>
+                        <th>User ID (Elem 100)</th>
+                        <th>State (Elem 101)</th>
+                        <th>Date of Birth (Elem 200)</th>
+                        <th>Veteran (Elem 300)</th>
+                        <th>Disability (Elem 202)</th>
+                        <th>Error Status</th>
+                        <th>Action</th>
+                    </tr>
+                `;
+            }
+
+            if (!data.records || data.records.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="8" class="empty-state">No reconstructed PIRL records loaded matching current filters.</td></tr>`;
+                setElText('paginationInfo', "Showing 0 - 0 of 0 records");
+                const pPrev = document.getElementById('prevPageBtn'); if (pPrev) pPrev.disabled = true;
+                const pNext = document.getElementById('nextPageBtn'); if (pNext) pNext.disabled = true;
+                return;
+            }
+
+            tbody.innerHTML = data.records.map(r => `
+                <tr class="${r.has_errors ? 'has-error-row' : ''}">
+                    <td><strong>#${r.row_number_display}</strong></td>
+                    <td><strong>${r.uiid || '(empty)'}</strong></td>
+                    <td>${r.state_code || '(empty)'}</td>
+                    <td>${r.dob || '(empty)'}</td>
+                    <td>${r.veteran_status || '(empty)'}</td>
+                    <td>${r.disability_status || '(empty)'}</td>
+                    <td>
+                        ${r.has_errors ? 
+                            `<span class="severity-badge error">⚠️ ${r.error_count} Error(s)</span>` : 
+                            `<span class="severity-badge" style="background:var(--success-bg); color:var(--success); border:1px solid rgba(16,185,129,0.3);">Clean</span>`}
+                    </td>
+                    <td>
+                        <button class="btn-inspect" onclick="inspectRecord(${r.pirl_row_index})">Inspect / Edit 🔍</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            const start = (data.page - 1) * data.page_size + 1;
+            const end = Math.min(data.page * data.page_size, data.total_records);
+            setElText('paginationInfo', `Showing ${start} - ${end} of ${data.total_records} records (Page ${data.page} of ${data.total_pages})`);
+
+            const pPrev = document.getElementById('prevPageBtn'); if (pPrev) pPrev.disabled = data.page <= 1;
+            const pNext = document.getElementById('nextPageBtn'); if (pNext) pNext.disabled = data.page >= data.total_pages;
+        }
+
+        function changePage(delta) {
+            currentPage += delta;
+            fetchCurrentViewData();
+        }
+
+        async function inspectRecord(pirlRowIndex) {
+            try {
+                const res = await fetch(`/api/record/${pirlRowIndex}`);
+                if (!res.ok) return alert("Could not load record details.");
+                currentRecordData = await res.json();
+                
+                setElText('modalTitle', `Record #${currentRecordData.row_number_display} Inspector`);
+                setElText('modalSubTitle', `Unique Individual Identifier: ${currentRecordData.uiid || 'N/A'}`);
+                
+                setElText('modalErrCount', currentRecordData.error_fields_count);
+                setElText('modalAllCount', currentRecordData.total_fields);
+                
+                activeModalTab = currentRecordData.error_fields_count > 0 ? 'errors' : 'all';
+                setModalTab(activeModalTab);
+                
+                const recModal = document.getElementById('recordModal');
+                if (recModal) recModal.style.display = 'flex';
+            } catch (err) { alert("Failed to fetch record details: " + err); }
+        }
+
+        function setModalTab(tab) {
+            activeModalTab = tab;
+            const tabErr = document.getElementById('tabErrorsOnly');
+            const tabAll = document.getElementById('tabAllFields');
+            if (tab === 'errors') {
+                if (tabErr) tabErr.classList.add('active');
+                if (tabAll) tabAll.classList.remove('active');
+            } else {
+                if (tabErr) tabErr.classList.remove('active');
+                if (tabAll) tabAll.classList.add('active');
+            }
+            renderModalFields();
+        }
+
+        function renderModalFields() {
+            if (!currentRecordData) return;
+            const grid = document.getElementById('modalFieldsGrid');
+            if (!grid) return;
+            
+            const fieldsToDisplay = activeModalTab === 'errors' ? 
+                currentRecordData.fields.filter(f => f.has_error) : 
+                currentRecordData.fields;
+
+            if (fieldsToDisplay.length === 0) {
+                grid.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;">No failing fields found for this record.</div>`;
+                return;
+            }
+
+            grid.innerHTML = fieldsToDisplay.map(f => `
+                <div class="field-card ${f.has_error ? 'error' : ''}">
+                    <div class="field-header">
+                        <span>Col #${f.col_index + 1} (Elem ${f.element_number})</span>
+                        ${f.has_error ? '<span style="color:var(--danger); font-weight:bold;">⚠️ Error</span>' : ''}
+                    </div>
+                    <div class="field-name">${f.column_name}</div>
+                    <div class="field-val-container" style="display:flex; gap:6px; align-items:center;">
+                        <input type="text" class="field-input" id="fieldInput_${f.col_index}" value="${f.value}" style="flex:1;">
+                        <button class="btn-secondary" style="padding:4px 8px; font-size:0.78rem;" onclick="pasteToFieldInput(${f.col_index})" title="Paste last copied value into input box">📋 Paste</button>
+                        <button class="btn-secondary" style="padding:4px 8px; font-size:0.78rem; background:rgba(37,99,235,0.2); color:#60a5fa; border:1px solid rgba(59,130,246,0.4);" onclick="pasteAndSaveCell(${currentRecordData.pirl_row_index}, ${f.col_index})" title="Paste copied value and save directly to file">⚡ Paste & Save</button>
+                        <button class="btn-save-cell" onclick="saveCellChange(${currentRecordData.pirl_row_index}, ${f.col_index})">💾 Save</button>
+                    </div>
+                    ${f.errors.map(e => `<div class="field-error-msg"><strong>[${e.error_code}]</strong> ${e.error_message}</div>`).join('')}
+                </div>
+            `).join('');
+        }
+
+        let lastCopiedValue = "";
+
+        function copyValueToClipboard(val) {
+            if (!val) return;
+            lastCopiedValue = val;
+            navigator.clipboard.writeText(val).catch(() => {});
+            alert(`📋 Copied value "${val}"!\nClick "📋 Paste" or "⚡ Paste & Save" on the row you want to correct.`);
+        }
+
+        function pasteToFieldInput(colIndex) {
+            const input = document.getElementById(`fieldInput_${colIndex}`);
+            if (!input) return;
+            if (lastCopiedValue) {
+                input.value = lastCopiedValue;
+            } else {
+                navigator.clipboard.readText().then(t => {
+                    if (t) input.value = t.trim();
+                }).catch(() => alert("Please click '📋 Copy' on a valid value first."));
+            }
+        }
+
+        async function pasteAndSaveCell(pirlRowIndex, colIndex) {
+            pasteToFieldInput(colIndex);
+            await saveCellChange(pirlRowIndex, colIndex);
+        }
+
+        async function runPreflightCheck() {
+            try {
+                const res = await fetch('/api/preflight-check', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    updateStats(data.stats);
+                    alert(`✈️ Preflight WIPS Check Complete!\nDetected ${data.preflight_discrepancies_count} discrepancy item(s) in local dataset.`);
+                    currentViewMode = 'errors';
+                    document.getElementById('tabModeErrors').classList.add('active');
+                    document.getElementById('tabModeTable').classList.remove('active');
+                    document.getElementById('errorsContainer').style.display = 'block';
+                    document.getElementById('tableContainer').style.display = 'none';
+                    currentPage = 1;
+                    await fetchErrors();
+                } else {
+                    alert(`⚠️ Preflight check failed: ${data.detail || 'No dataset loaded.'}`);
+                }
+            } catch (err) { alert("Error running preflight check: " + err); }
+        }
+
+        async function saveCellChange(pirlRowIndex, colIndex) {
+            const input = document.getElementById(`fieldInput_${colIndex}`);
+            if (!input) return;
+            const newVal = input.value;
+
+            try {
+                const res = await fetch('/api/cell-update', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pirl_row_index: pirlRowIndex, col_name_or_index: String(colIndex), new_value: newVal })
+                });
+
+                if (!res.ok) return alert("Failed to save cell change.");
+                const data = await res.json();
+                updateStats(data.stats);
+                alert(`✅ Saved column #${colIndex + 1}! (${data.save_message || 'Original CSV format preserved as-is'}).`);
+                await inspectRecord(pirlRowIndex);
+                await fetchCurrentViewData();
+            } catch (err) { alert("Error saving cell change: " + err); }
+        }
+
+        async function saveFileToFolder() {
+            try {
+                const res = await fetch('/api/save-file', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    alert(`✅ ${data.message} (Original CSV format preserved as-is!)`);
+                } else {
+                    alert(`⚠️ ${data.message}`);
+                }
+            } catch (err) { alert("Error saving file: " + err); }
+        }
+
+        function closeModal(id) {
+            const el = document.getElementById(id);
+            if (el) el.style.display = 'none';
+        }
+
+        function openPasteModal() {
+            const el = document.getElementById('pasteModal');
+            if (el) el.style.display = 'flex';
+        }
+
+        async function submitPastedErrors() {
+            const textEl = document.getElementById('pasteTextarea');
+            if (!textEl) return;
+            const text = textEl.value;
+            if (!text.trim()) return alert("Please paste WIPS error text.");
+
+            try {
+                const res = await fetch('/api/paste-errors', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ raw_text: text })
+                });
+                const data = await res.json();
+                updateStats(data.stats);
+                closeModal('pasteModal');
+                alert(`Processed WIPS error text! Parsed ${data.errors_parsed} error item(s).`);
+                currentPage = 1;
+                await fetchCurrentViewData();
+            } catch (err) { alert("Error processing WIPS text: " + err); }
+        }
+
+        function exportErrorList(format) {
+            const q = getElValue('filterGlobal');
+            const elem = getElValue('elementFilterInput');
+            const sev = getElValue('severityFilter');
+            window.location.href = `/api/export-errors?query=${encodeURIComponent(q)}&element=${encodeURIComponent(elem)}&severity=${encodeURIComponent(sev)}&format=${format}`;
+        }
+
+        function exportPirlWithHeaders(format) {
+            window.location.href = `/api/export-pirl-headers?format=${format}`;
+        }
+
+        function exportHeaderlessPirl() {
+            window.location.href = `/api/export-headerless-pirl`;
+        }
+
+        function changeTheme(themeName) {
+            document.body.setAttribute('data-theme', themeName);
+            localStorage.setItem('pirl_app_theme', themeName);
+            const selector = document.getElementById('themeSelector');
+            if (selector) selector.value = themeName;
+        }
+
+        // Initialize Theme & Stats on Boot
+        const savedTheme = localStorage.getItem('pirl_app_theme') || 'dark';
+        changeTheme(savedTheme);
+
+        fetch('/api/stats').then(res => res.json()).then(stats => updateStats(stats));
+    </script>
+</body>
+</html>
