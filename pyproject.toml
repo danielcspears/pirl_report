@@ -1,0 +1,14 @@
+[project]
+name = "pirl-report"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi",
+    "pandas",
+    "uvicorn",
+    "openpyxl",
+    "python-multipart",
+    "httpx",
+    "jinja2",
+    "python-docx",
+]
