@@ -219,8 +219,8 @@ __marimo__/
 *.docx
 *pirl.py
 
-*.csv
-*.xlsx
+*.[cC][sS][vV]
+*.[xX][lL][sS][xX]
 *.xls
 *.tsv
 *.log
@@ -228,4 +228,5 @@ __marimo__/
 ._*
 
 
-.zip
+*.[cC][sS][vV].[zZ][iI][pP]
+*.[xX][lL][sS][xX].[zZ][iI][pP]
