@@ -743,19 +743,20 @@
             <div class="upload-inputs-grid" style="grid-template-columns: 1fr 1fr;">
                 <div class="upload-box">
                     <label>1. PIRL Data File (.csv - 22_FULL_PIRL / wp_pirl)</label>
-                    <input type="file" id="pirlFileInput" accept=".csv">
+                    <input type="file" id="pirlFileInput" accept=".csv" onchange="uploadFiles()">
                 </div>
                 <div class="upload-box">
                     <label>2. PIRL Schema Header (PIRL Schema Header.csv)</label>
-                    <input type="file" id="schemaFileInput" accept=".csv">
+                    <input type="file" id="schemaFileInput" accept=".csv" onchange="uploadFiles()">
                 </div>
             </div>
 
             <div class="btn-group" style="margin-top: 14px;">
-                <button class="btn" style="background: linear-gradient(135deg, #2563eb, #3b82f6); font-weight:700;" onclick="runPreflightCheck()">✈️ Preflight WIPS Check</button>
+                <button class="btn" id="preflightBtn" style="background: linear-gradient(135deg, #2563eb, #3b82f6); font-weight:700;" onclick="runPreflightCheck()">✈️ Preflight WIPS Check</button>
                 <button class="btn btn-secondary" onclick="openPasteModal()">📋 Paste WIPS Text Errors</button>
                 <button class="btn btn-secondary" id="uploadBtn" onclick="uploadFiles()">🚀 Load / Refresh Dataset</button>
             </div>
+            <p id="datasetStatus" role="status" aria-live="polite" style="margin-top:12px; color:var(--text-muted);">No dataset loaded. Choose a PIRL CSV to load it automatically.</p>
         </div>
 
         <!-- Mode Switcher -->
@@ -844,23 +845,6 @@
                 </div>
             </div>
 
-            <div class="table-card">
-                <div class="table-wrapper">
-                    <table>
-                        <thead id="mainTableHead"></thead>
-                        <tbody id="mainTableBody">
-                            <tr><td colspan="8" class="empty-state">No DOL errors loaded yet. Upload data files or click <strong>📋 Paste WIPS Text Errors</strong>.</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-                <div class="pagination-bar">
-                    <div id="paginationInfo">Showing 0 - 0 records</div>
-                    <div style="display:flex; gap:8px;">
-                        <button class="btn btn-secondary" id="prevPageBtn" onclick="changePage(-1)">Previous</button>
-                        <button class="btn btn-secondary" id="nextPageBtn" onclick="changePage(1)">Next</button>
-                    </div>
-                </div>
-            </div>
         </div>
 
         <div id="viewTableSection" style="display:none;">
@@ -894,6 +878,24 @@
                             <option value="0">0 - No / None</option>
                         </select>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="table-card">
+            <div class="table-wrapper">
+                <table>
+                    <thead id="mainTableHead"></thead>
+                    <tbody id="mainTableBody">
+                        <tr><td colspan="8" class="empty-state">Choose a PIRL CSV to load participant records.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="pagination-bar">
+                <div id="paginationInfo">Showing 0 - 0 records</div>
+                <div style="display:flex; gap:8px;">
+                    <button class="btn btn-secondary" id="prevPageBtn" onclick="changePage(-1)">Previous</button>
+                    <button class="btn btn-secondary" id="nextPageBtn" onclick="changePage(1)">Next</button>
                 </div>
             </div>
         </div>
@@ -947,6 +949,8 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
         let searchTimeout = null;
         let currentRecordData = null;
         let activeModalTab = 'errors';
+        let datasetLoaded = false;
+        let datasetLoadPromise = null;
 
         const dropzone = document.getElementById('dropzone');
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
@@ -980,15 +984,24 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
             el.files = container.files;
         }
 
-        async function uploadFiles() {
+        function setDatasetStatus(message, isError = false) {
+            const status = document.getElementById('datasetStatus');
+            if (status) {
+                status.textContent = message;
+                status.style.color = isError ? 'var(--danger)' : 'var(--text-muted)';
+            }
+        }
+
+        function uploadFiles() {
+            if (datasetLoadPromise) return datasetLoadPromise;
+            datasetLoadPromise = performUpload().finally(() => { datasetLoadPromise = null; });
+            return datasetLoadPromise;
+        }
+
+        async function performUpload() {
             const pirlInput = document.getElementById('pirlFileInput');
             const errorInput = document.getElementById('errorFileInput');
             const schemaInput = document.getElementById('schemaFileInput');
-
-            if ((!pirlInput || !pirlInput.files[0]) && (!errorInput || !errorInput.files[0]) && (!schemaInput || !schemaInput.files[0])) {
-                alert("Please select or drop a PIRL Data file or DOL Error Report file.");
-                return;
-            }
 
             const formData = new FormData();
             if (pirlInput && pirlInput.files[0]) formData.append('pirl_file', pirlInput.files[0]);
@@ -997,17 +1010,31 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
 
             const uploadBtn = document.getElementById('uploadBtn');
             if (uploadBtn) { uploadBtn.innerHTML = '⏳ Processing...'; uploadBtn.disabled = true; }
+            const controls = [pirlInput, errorInput, schemaInput, document.getElementById('preflightBtn')].filter(Boolean);
+            controls.forEach(control => { control.disabled = true; });
+            setDatasetStatus('Loading dataset… Please wait.');
 
             try {
                 const res = await fetch('/api/upload', { method: 'POST', body: formData });
-                const data = await res.json();
+                const data = await res.json().catch(() => { throw new Error('The server could not read the CSV. Check the server terminal for details.'); });
+                if (!res.ok) throw new Error(data.detail || 'The dataset could not be loaded.');
                 updateStats(data.stats);
                 currentPage = 1;
-                await fetchCurrentViewData();
+                if (data.pirl_records_processed !== undefined) {
+                    await switchViewMode('table');
+                } else {
+                    await fetchCurrentViewData();
+                }
+                setDatasetStatus(datasetLoaded
+                    ? `Loaded ${data.stats.total_pirl_records.toLocaleString()} PIRL records${data.pirl_filename ? ' from ' + data.pirl_filename : ''}.`
+                    : 'Schema loaded. Choose a PIRL Data File to load participant records.');
+                return data;
             } catch (err) {
-                alert("Error processing uploaded files: " + err);
+                setDatasetStatus(`Dataset load failed: ${err.message}`, true);
+                return null;
             } finally {
-                if (uploadBtn) { uploadBtn.innerHTML = '🚀 Inspect & Match Errors'; uploadBtn.disabled = false; }
+                if (uploadBtn) { uploadBtn.innerHTML = '🚀 Load / Refresh Dataset'; uploadBtn.disabled = false; }
+                controls.forEach(control => { control.disabled = false; });
             }
         }
 
@@ -1035,6 +1062,7 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
 
         function updateStats(stats) {
             if (!stats) return;
+            datasetLoaded = stats.total_pirl_records > 0;
             setElText('statRecords', (stats.total_pirl_records || 0).toLocaleString());
             setElText('statErrors', (stats.total_errors || 0).toLocaleString());
             setElText('statTotalErrors', (stats.total_errors || 0).toLocaleString());
@@ -1066,7 +1094,7 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
                 if (secTable) secTable.style.display = 'block';
             }
             currentPage = 1;
-            fetchCurrentViewData();
+            return fetchCurrentViewData();
         }
 
         function debounceSearch() {
@@ -1392,18 +1420,20 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
 
         async function runPreflightCheck() {
             try {
+                if (datasetLoadPromise) {
+                    if (!await datasetLoadPromise) return;
+                }
+                if (!datasetLoaded && !await uploadFiles()) return;
+                if (!datasetLoaded) {
+                    setDatasetStatus('Choose a PIRL Data File before running a preflight check.', true);
+                    return;
+                }
                 const res = await fetch('/api/preflight-check', { method: 'POST' });
                 const data = await res.json();
                 if (data.status === 'success') {
                     updateStats(data.stats);
                     alert(`✈️ Preflight WIPS Check Complete!\nDetected ${data.preflight_discrepancies_count} discrepancy item(s) in local dataset.`);
-                    currentViewMode = 'errors';
-                    document.getElementById('tabModeErrors').classList.add('active');
-                    document.getElementById('tabModeTable').classList.remove('active');
-                    document.getElementById('errorsContainer').style.display = 'block';
-                    document.getElementById('tableContainer').style.display = 'none';
-                    currentPage = 1;
-                    await fetchErrors();
+                    await switchViewMode('errors');
                 } else {
                     alert(`⚠️ Preflight check failed: ${data.detail || 'No dataset loaded.'}`);
                 }
@@ -1500,7 +1530,13 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
         const savedTheme = localStorage.getItem('pirl_app_theme') || 'dark';
         changeTheme(savedTheme);
 
-        fetch('/api/stats').then(res => res.json()).then(stats => updateStats(stats));
+        fetch('/api/stats').then(res => res.json()).then(async stats => {
+            updateStats(stats);
+            setDatasetStatus(datasetLoaded
+                ? `Loaded ${stats.total_pirl_records.toLocaleString()} PIRL records.`
+                : 'No dataset loaded. Choose a PIRL CSV to load it automatically.');
+            await fetchCurrentViewData();
+        }).catch(() => setDatasetStatus('Could not connect to the app. Check that the server is running.', true));
     </script>
 </body>
 </html>

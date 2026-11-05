@@ -76,7 +76,15 @@ async def upload_files(
 
     if pirl_file and pirl_file.filename:
         pirl_bytes = await pirl_file.read()
-        records_count = parser.parse_pirl_data(pirl_bytes, pirl_file.filename)
+        try:
+            records_count = parser.parse_pirl_data(pirl_bytes, pirl_file.filename)
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not read the PIRL CSV. Use a comma-separated UTF-8 CSV with consistent columns."
+            ) from exc
+        if records_count == 0:
+            raise HTTPException(status_code=422, detail="The PIRL CSV contains no data rows.")
         results["pirl_records_processed"] = records_count
         results["pirl_filename"] = pirl_file.filename
 
@@ -85,6 +93,18 @@ async def upload_files(
         parsed_errors = parser.parse_error_report(err_bytes, error_file.filename)
         results["errors_parsed"] = len(parsed_errors)
         results["error_filename"] = error_file.filename
+
+    if not any(file and file.filename for file in (pirl_file, error_file, schema_file)):
+        # A CSV may have been copied into the project after the server started.
+        if parser.pirl_df is None or parser.pirl_df.empty:
+            parser.auto_load_default_pirl_file()
+        if parser.pirl_df is None or parser.pirl_df.empty:
+            raise HTTPException(
+                status_code=400,
+                detail="No PIRL dataset loaded. Choose a PIRL Data File to load it."
+            )
+        results["pirl_records_processed"] = len(parser.pirl_df)
+        results["pirl_filename"] = parser.loaded_filename
 
     results["stats"] = parser.get_stats()
     return JSONResponse(content=results)

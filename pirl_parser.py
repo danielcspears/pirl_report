@@ -91,9 +91,6 @@ class PIRLParser:
 
     def parse_pirl_data(self, file_content: bytes, filename: str, filepath: Optional[str] = None) -> int:
         """Parses PIRL CSV file content (headerless or with header matching schema)."""
-        self.loaded_filename = filename
-        self.loaded_filepath = filepath or (filename if os.path.exists(filename) else self.loaded_filepath)
-
         buffer = io.BytesIO(file_content)
         
         sample_line = buffer.readline().decode('utf-8', errors='ignore')
@@ -105,8 +102,6 @@ class PIRLParser:
             if first_col in sample_line.lower() or "obs number" in sample_line.lower():
                 is_headerless = False
 
-        self.has_header = not is_headerless
-
         if is_headerless:
             names = self.schema_columns if self.schema_columns else None
             df = pd.read_csv(buffer, header=None, names=names, dtype=str, keep_default_na=False)
@@ -115,7 +110,13 @@ class PIRLParser:
             if self.schema_columns and len(df.columns) == len(self.schema_columns):
                 df.columns = self.schema_columns
 
+        if df.empty:
+            raise pd.errors.EmptyDataError("The PIRL CSV contains no data rows.")
+
         df = df.astype(str).fillna("")
+        self.loaded_filename = filename
+        self.loaded_filepath = filepath or (filename if os.path.isfile(filename) else None)
+        self.has_header = not is_headerless
         self.pirl_df = df
         
         # Run pre-validation checks and re-link DOL errors
@@ -244,7 +245,13 @@ class PIRLParser:
                 })
 
         # Check 5: Timeline Logical Inversion (Exit Date < Entry Date)
-        valid_dates_mask = entry_date_s.str.isdigit() & exit_date_s.str.isdigit() & (entry_date_s != "") & (exit_date_s != "")
+        # Blank and all-zero dates are unset. Active participants may have no exit.
+        valid_dates_mask = (
+            entry_date_s.str.isdigit()
+            & exit_date_s.str.isdigit()
+            & ~entry_date_s.str.fullmatch(r"0+", na=False)
+            & ~exit_date_s.str.fullmatch(r"0+", na=False)
+        )
         if valid_dates_mask.any():
             en_int = pd.to_numeric(entry_date_s[valid_dates_mask], errors='coerce')
             ex_int = pd.to_numeric(exit_date_s[valid_dates_mask], errors='coerce')
@@ -673,8 +680,6 @@ class PIRLParser:
                     errors_by_row[r_idx] = []
                 errors_by_row[r_idx].append(err)
 
-        filtered_indices = []
-
         q_clean = query.lower().strip()
         uiid_clean = uiid.lower().strip()
         state_clean = state_id.lower().strip()
@@ -682,31 +687,28 @@ class PIRLParser:
         vet_clean = veteran.lower().strip()
         dis_clean = disability.lower().strip()
 
-        for r_idx in range(len(df)):
-            row = df.iloc[r_idx]
+        # Filter columns directly; constructing every 495-field row just to show
+        # one page is particularly expensive with pandas 3 string columns.
+        matching_rows = pd.Series(True, index=df.index)
+        for term, col_idx in (
+            (uiid_clean, idx_uiid), (state_clean, idx_state), (dob_clean, idx_dob),
+            (vet_clean, idx_veteran), (dis_clean, idx_disability),
+        ):
+            if term and col_idx is not None and col_idx < len(df.columns):
+                matching_rows &= df.iloc[:, col_idx].astype(str).str.contains(
+                    term, case=False, regex=False, na=False
+                )
 
-            if uiid_clean and idx_uiid is not None and idx_uiid < len(row):
-                if uiid_clean not in str(row.iloc[idx_uiid]).lower():
-                    continue
-            if state_clean and idx_state is not None and idx_state < len(row):
-                if state_clean not in str(row.iloc[idx_state]).lower():
-                    continue
-            if dob_clean and idx_dob is not None and idx_dob < len(row):
-                if dob_clean not in str(row.iloc[idx_dob]).lower():
-                    continue
-            if vet_clean and idx_veteran is not None and idx_veteran < len(row):
-                if vet_clean not in str(row.iloc[idx_veteran]).lower():
-                    continue
-            if dis_clean and idx_disability is not None and idx_disability < len(row):
-                if dis_clean not in str(row.iloc[idx_disability]).lower():
-                    continue
-
-            if q_clean:
-                row_str = " ".join([str(v) for v in row.values]).lower()
-                if q_clean not in row_str:
-                    continue
-
-            filtered_indices.append(r_idx)
+        filtered_indices = df.index[matching_rows].tolist()
+        if q_clean:
+            # Keep global search semantics, including phrases spanning fields.
+            candidates = df.loc[filtered_indices]
+            filtered_indices = [
+                r_idx for r_idx, values in zip(
+                    filtered_indices, candidates.itertuples(index=False, name=None)
+                )
+                if q_clean in " ".join(map(str, values)).lower()
+            ]
 
         total_count = len(filtered_indices)
         start_idx = (page - 1) * page_size
