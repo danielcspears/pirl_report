@@ -2,9 +2,24 @@ import io
 import re
 import os
 import glob
+import csv
+import json
+import tempfile
+from pathlib import Path
 import pandas as pd
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
+
+SCHEMA_CATALOG = json.loads(Path(__file__).with_name("pirl_schemas.json").read_text())
+ELEMENT_PATTERN = r"^(\d+(?:-[A-Za-z]|[A-Za-z])?)\b"
+SCHOOL_STATUS_CODES = {
+    "1": "In school: secondary school or less",
+    "2": "In school: alternative school",
+    "3": "In school: postsecondary school",
+    "4": "Not attending school or secondary school dropout (beyond compulsory school age)",
+    "5": "Not attending school: secondary school graduate or recognized equivalent",
+    "6": "Not attending school: within compulsory school age, without a diploma or equivalent",
+}
 
 class PIRLParser:
     def __init__(self, schema_header_path: Optional[str] = "PIRL Schema Header.csv"):
@@ -18,9 +33,15 @@ class PIRLParser:
         self.loaded_filename: str = "wp_pirl.csv"
         self.has_header: bool = False
         self.edits_count: int = 0
+        self.saved_edits_count: int = 0
+        self.last_saved_path: Optional[str] = None
+        self.schema_name: str = "Custom schema"
+        self.schema_notice: str = ""
 
         if schema_header_path:
             self.load_schema_header(schema_header_path)
+        if not self.schema_columns:
+            self._set_schema(SCHEMA_CATALOG["schemas"]["2025"], "Full PIRL 2025")
 
         # Auto-detect existing 22_FULL_PIRL data file in root directory if present
         self.auto_load_default_pirl_file()
@@ -46,77 +67,119 @@ class PIRLParser:
                 print(f"Auto-load of {pirl_candidates[0]} failed: {e}")
         return False
 
-    def load_schema_header(self, filepath_or_buffer) -> List[str]:
+    def load_schema_header(self, filepath_or_buffer, allow_layout_change: bool = False) -> List[str]:
         """Loads PIRL schema header columns and builds element mapping index (filters out empty/unnamed trailing cols)."""
         try:
-            if isinstance(filepath_or_buffer, str):
-                df = pd.read_csv(filepath_or_buffer, nrows=0)
-            else:
-                df = pd.read_csv(filepath_or_buffer, nrows=0)
-            
-            raw_columns = [col.strip() for col in df.columns.tolist()]
-            self.schema_columns = [col for col in raw_columns if col and not col.startswith("Unnamed:")]
-            self.element_number_to_col_index = {}
-            self.col_index_to_element_number = {}
-
-            for idx, col in enumerate(self.schema_columns):
-                match = re.match(r"^(\d+[A-Za-z]?)\b", col)
-                elem_num = match.group(1) if match else str(idx)
-                self.element_number_to_col_index[elem_num] = idx
-                self.element_number_to_col_index[col.lower()] = idx
-                self.col_index_to_element_number[idx] = elem_num
-
+            df = pd.read_csv(filepath_or_buffer, nrows=0)
+            columns = [col.strip() for col in df.columns if col.strip() and not col.startswith("Unnamed:")]
+            matches = [re.match(ELEMENT_PATTERN, c) for c in columns]
+            if not columns or not all(matches) or len({m.group(1) for m in matches}) != len(columns):
+                raise ValueError("Schema headers must start with distinct PIRL element numbers (for example, 409 - School Status).")
+            if self.pirl_df is not None and not allow_layout_change and (
+                len(columns) != len(self.pirl_df.columns)
+                or [re.match(ELEMENT_PATTERN, c).group(1) for c in columns]
+                != list(self.col_index_to_element_number.values())
+            ):
+                raise ValueError("Schema width does not match the loaded dataset. Load the matching data and schema together.")
+            self._set_schema(columns)
+            if self.pirl_df is not None and not allow_layout_change:
+                self.pirl_df.columns = columns
+                self.run_pirl_pre_validation_checks()
+                self._link_errors_to_pirl()
             return self.schema_columns
-        except Exception as e:
-            print(f"Error loading schema header: {e}")
-            return []
+        except (pd.errors.EmptyDataError, pd.errors.ParserError) as exc:
+            raise ValueError("Could not read the PIRL schema header.") from exc
+
+    def _set_schema(self, columns: List[str], name: str = "Custom schema"):
+        self.schema_columns = list(columns)
+        self.schema_name = name
+        self.element_number_to_col_index = {}
+        self.col_index_to_element_number = {}
+        for idx, col in enumerate(columns):
+            match = re.match(ELEMENT_PATTERN, col)
+            elem_num = match.group(1) if match else str(idx)
+            self.element_number_to_col_index[elem_num] = idx
+            self.element_number_to_col_index[col.lower()] = idx
+            self.col_index_to_element_number[idx] = elem_num
+
+    def _write_csv_atomic(self, target_path: str):
+        """Replace a complete file only after serialization succeeds."""
+        directory = os.path.dirname(os.path.abspath(target_path))
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=directory, delete=False) as output:
+                temp_path = output.name
+                self.pirl_df.to_csv(output, header=self.has_header, index=False, lineterminator="\n")
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temp_path, target_path)
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     def save_to_disk(self) -> Tuple[bool, str]:
         """Saves corrected dataset directly back to disk in its original CSV format (headerless if originally headerless)."""
         if self.pirl_df is None:
             return False, "No PIRL dataset loaded."
 
-        target_path = self.loaded_filepath
-        if not target_path or not os.path.exists(os.path.dirname(os.path.abspath(target_path))):
-            target_path = self.loaded_filename if self.loaded_filename else "wp_pirl_corrected.csv"
+        # A browser upload supplies a name, never the original computer path.
+        # Save a clearly named server-side copy rather than implying that it was overwritten.
+        target_path = self.loaded_filepath or str(Path(__file__).parent / (Path(self.loaded_filename).stem + "_corrected.csv"))
 
         try:
-            # Preserve exact CSV format as-is (headerless if original was headerless, no extra index column)
-            self.pirl_df.to_csv(target_path, header=self.has_header, index=False, lineterminator='\n')
-            print(f"Saved corrected PIRL data directly to disk: {target_path}")
-            return True, f"Saved corrected dataset to {os.path.basename(target_path)}"
+            self._write_csv_atomic(target_path)
+            self.last_saved_path = os.path.abspath(target_path)
+            self.saved_edits_count = self.edits_count
+            return True, f"Saved {self.edits_count} correction(s), {len(self.pirl_df):,} rows × {len(self.pirl_df.columns)} columns to {self.last_saved_path}."
         except Exception as e:
             print(f"Failed saving to disk: {e}")
             return False, f"Failed to save file to disk: {e}"
 
     def parse_pirl_data(self, file_content: bytes, filename: str, filepath: Optional[str] = None) -> int:
         """Parses PIRL CSV file content (headerless or with header matching schema)."""
-        buffer = io.BytesIO(file_content)
-        
-        sample_line = buffer.readline().decode('utf-8', errors='ignore')
-        buffer.seek(0)
+        text = file_content.decode("utf-8-sig")
+        rows = csv.reader(io.StringIO(text), strict=True)
+        first_row = next((row for row in rows if row), None)
+        if first_row is None:
+            raise pd.errors.EmptyDataError("The PIRL CSV contains no data rows.")
+        width = len(first_row)
+        for row_number, row in enumerate(rows, 2):
+            if row and len(row) != width:
+                raise ValueError(f"CSV row {row_number} has {len(row)} columns; expected {width}. No data was loaded.")
 
-        is_headerless = True
-        if self.schema_columns:
-            first_col = self.schema_columns[0].lower()
-            if first_col in sample_line.lower() or "obs number" in sample_line.lower():
-                is_headerless = False
+        has_header = bool(re.match(ELEMENT_PATTERN, first_row[0]) and " - " in first_row[0])
+        columns = self.schema_columns
+        schema_name = self.schema_name
+        notice = ""
+        official = next(((year, cols) for year, cols in SCHEMA_CATALOG["schemas"].items() if len(cols) == width), None)
+        if official:
+            year, official_columns = official
+            schema_name = f"Full PIRL {year}"
+            columns = self.schema_columns if self.schema_columns == official_columns or (
+                len(self.schema_columns) == width
+                and list(self.col_index_to_element_number.values()) == [re.match(ELEMENT_PATTERN, c).group(1) for c in official_columns]
+            ) else official_columns
+            if width != len(self.schema_columns):
+                notice = f"Selected {schema_name} ({width} columns); the previous schema had {len(self.schema_columns)} columns."
+            if has_header and [re.match(ELEMENT_PATTERN, c).group(1) if re.match(ELEMENT_PATTERN, c) else None for c in first_row] != [re.match(ELEMENT_PATTERN, c).group(1) for c in columns]:
+                raise ValueError("CSV headers do not match the official PIRL element order. Use the matching schema and column order.")
+        elif width != len(columns):
+            raise ValueError(f"CSV has {width} columns, but the selected schema has {len(columns)}. Upload a matching schema; columns will not be padded or discarded.")
 
-        if is_headerless:
-            names = self.schema_columns if self.schema_columns else None
-            df = pd.read_csv(buffer, header=None, names=names, dtype=str, keep_default_na=False)
-        else:
-            df = pd.read_csv(buffer, dtype=str, keep_default_na=False)
-            if self.schema_columns and len(df.columns) == len(self.schema_columns):
-                df.columns = self.schema_columns
+        df = pd.read_csv(io.StringIO(text), header=0 if has_header else None, dtype=str, keep_default_na=False)
+        df.columns = columns
 
         if df.empty:
             raise pd.errors.EmptyDataError("The PIRL CSV contains no data rows.")
 
-        df = df.astype(str).fillna("")
-        self.loaded_filename = filename
-        self.loaded_filepath = filepath or (filename if os.path.isfile(filename) else None)
-        self.has_header = not is_headerless
+        df = df.fillna("").astype(str)
+        self._set_schema(columns, schema_name)
+        self.schema_notice = notice
+        self.loaded_filename = Path(filename.replace("\\", "/")).name
+        self.loaded_filepath = os.path.abspath(filepath) if filepath else None
+        self.has_header = has_header
+        self.edits_count = self.saved_edits_count = 0
+        self.last_saved_path = None
         self.pirl_df = df
         
         # Run pre-validation checks and re-link DOL errors
@@ -320,12 +383,10 @@ class PIRLParser:
                 })
 
         # Check 8: Duplicate UIID records with conflicting Dates of Birth (WIPS Element 200 Rule)
-        valid_uiids = uiid_s[(uiid_s != "") & (uiid_s != "0") & (uiid_s.str.lower() != "nan")]
-        if not valid_uiids.empty:
-            dob_col = self.element_number_to_col_index.get("200", 12)
-            dob_series = df.iloc[:, dob_col].astype(str).str.strip()
-            # Group by UIID and count unique non-empty DOBs
-            grouped_dobs = df.groupby(uiid_s)[df.columns[dob_col]].nunique()
+        valid_uiids = ~uiid_s.str.lower().isin(["", "0", "nan", "none"]) & ~uiid_s.str.fullmatch(r"0+", na=False)
+        if valid_uiids.any() and "200" in self.element_number_to_col_index:
+            dob_series = dob_s
+            grouped_dobs = dob_s[valid_uiids].groupby(uiid_s[valid_uiids]).nunique()
             conflict_uiids = set(grouped_dobs[grouped_dobs > 1].index)
             
             if conflict_uiids:
@@ -347,6 +408,33 @@ class PIRLParser:
                         "is_pre_check": True
                     })
 
+        # A program entry date establishes participation for this local check.
+        # All-zero dates are unset; pre-apprenticeship has its own mandatory rule.
+        if "409" in self.element_number_to_col_index:
+            school_s = get_series("409")
+            participant = entry_date_s.str.fullmatch(r"\d{8}", na=False) & (entry_date_s != "00000000")
+            pre_apprentice = ~get_series("2901").isin(["", "0"]) & ~get_series("2902").isin(["", "0", "00000000"])
+            missing_school = (participant | pre_apprentice) & school_s.eq("")
+            invalid_school = school_s.ne("") & ~school_s.isin(SCHOOL_STATUS_CODES)
+            for r_idx in df.index[missing_school | invalid_school]:
+                discrepancies.append({
+                    "id": len(discrepancies) + 1,
+                    "pirl_row_index": int(r_idx), "row_number": str(int(r_idx) + 1),
+                    "uiid": uiid_s.at[r_idx], "element": "409", "element_number": "409",
+                    "element_col_name": get_col_name("409"), "error_code": "WIPS_ELEM_409",
+                    "error_message": (
+                        "B) IF [Participant] THEN School Status at Program Entry (WIOA) (PIRL 409) must NOT be blank"
+                        if missing_school.at[r_idx] and participant.at[r_idx] else
+                        "PIRL 409 is required when pre-apprenticeship status and enrollment date are provided."
+                        if missing_school.at[r_idx] else
+                        "School Status at Program Entry (PIRL 409) must be a code from 1 through 6."
+                    ),
+                    "current_value": school_s.at[r_idx], "severity": "Error", "is_pre_check": True,
+                })
+
+        for err in discrepancies:
+            row = df.iloc[err["pirl_row_index"]]
+            err.update(self._row_context(row))
         self.pre_discrepancies_list = discrepancies
         return discrepancies
 
@@ -443,71 +531,49 @@ class PIRLParser:
         errors = []
         raw_full_text = "\n".join(lines)
         
-        # Check if text contains WIPS block format or WIPS table headers/columns
-        if any(k in raw_full_text for k in ["Error Message for Element No.", "Row Number", "Unique Individual Identifier", "Value Provided"]):
-            elem_hdr_pat = re.compile(r'Element No\.\s*(\d+[A-Za-z]?)', re.IGNORECASE)
-            
-            # Extract header elements & error descriptions from text lines
-            current_element = ""
-            current_msg = ""
+        # Keep each section's element and rule together while stripping the
+        # empty Markdown tables produced when copying the WIPS results page.
+        if any(k in raw_full_text for k in ["Error Message for Element No.", "Row Number", "Value Provided"]):
+            tokens = []
             for line in lines:
-                m_elem = elem_hdr_pat.search(line)
-                if m_elem:
-                    current_element = m_elem.group(1)
-                elif current_element and ("IF " in line or "THEN " in line or "must " in line):
-                    current_msg = line.strip()
-
-            # Tokenize entire text by tabs and newlines to support multi-line web table pastes
-            tokens = [t.strip().strip('"') for t in re.split(r'[\r\n\t]+', raw_full_text) if t.strip()]
-            
+                line = line.strip().replace("**", "")
+                if not line or re.fullmatch(r"[|:\-\s]+", line):
+                    continue
+                tokens.extend(t.strip().strip('"') for t in re.split(r"[\t|]+", line) if t.strip())
+            current_element, current_msg = "", ""
             i = 0
             while i < len(tokens):
                 tok = tokens[i]
-                # Skip header label tokens
-                if tok.lower() in ["row", "number", "unique", "individual", "identifier", "value", "provided", "row number", "element", "no.", "count", "of", "errors"]:
+                heading = re.search(r"Element No\.\s*(\d+[A-Za-z]?)", tok, re.I)
+                if heading:
+                    current_element, current_msg = heading.group(1), ""
                     i += 1
                     continue
-                    
-                if tok.isdigit() and int(tok) > 0:
-                    row_num = tok
-                    if i + 1 < len(tokens):
-                        possible_uiid = tokens[i+1]
-                        if re.match(r'^(?:0\d+|\d{6,}|[A-Za-z0-9_-]{6,})$', possible_uiid):
-                            uiid = possible_uiid
-                            val = ""
-                            advance = 2
-                            if i + 2 < len(tokens):
-                                possible_val = tokens[i+2]
-                                if not possible_val.isdigit() or len(possible_val) == 8 or possible_val in ["No Value Provided", "MISSING", "None"]:
-                                    if not (possible_val.isdigit() and len(possible_val) <= 6 and i+3 < len(tokens) and re.match(r'^(?:0\d+|\d{6,}|[A-Za-z0-9_-]{6,})$', tokens[i+3])):
-                                        val = "" if possible_val in ["No Value Provided", "MISSING", "None"] else possible_val
-                                        advance = 3
-                            
-                            elem = current_element
-                            msg = current_msg
-                            if not elem:
-                                if len(val) == 8 and val.isdigit():
-                                    elem = "200"
-                                    msg = "C) IF multiple records have the same Unique Individual Identifier (WIOA) (PIRL 100), THEN each record must have the same Date of Birth (WIOA) (PIRL 200)"
-                                else:
-                                    elem = "409"
-                                    msg = "B) IF [Participant] THEN School Status at Program Entry (WIOA) (PIRL 409) must NOT be blank"
-                                    
-                            errors.append({
-                                "id": len(errors) + 1,
-                                "row_number": row_num,
-                                "uiid": uiid,
-                                "element": elem,
-                                "error_code": f"WIPS_ELEM_{elem}",
-                                "error_message": msg,
-                                "current_value": val,
-                                "severity": "Error",
-                                "is_pre_check": False
-                            })
-                            i += advance
-                            continue
+                if current_element and re.search(r"\b(?:IF|THEN|must)\b", tok, re.I):
+                    current_msg = tok
+                    i += 1
+                    continue
+                if tok.isdigit() and int(tok) > 0 and i + 1 < len(tokens):
+                    uiid = tokens[i + 1]
+                    if re.fullmatch(r"(?:0\d+|\d{6,}|[A-Za-z0-9_-]{6,})", uiid):
+                        val = ""
+                        advance = 2
+                        if i + 2 < len(tokens):
+                            candidate = tokens[i + 2]
+                            next_row = candidate.isdigit() and i + 3 < len(tokens) and re.fullmatch(r"(?:0\d+|\d{6,}|[A-Za-z0-9_-]{6,})", tokens[i + 3])
+                            if not next_row and not re.search(r"Element No\.", candidate, re.I):
+                                val = "" if candidate.lower() in ("no value provided", "missing", "none") else candidate
+                                advance = 3
+                        elem = current_element or ("200" if len(val) == 8 and val.isdigit() else "409")
+                        errors.append({
+                            "id": len(errors) + 1, "row_number": tok, "uiid": uiid,
+                            "element": elem, "error_code": f"WIPS_ELEM_{elem}",
+                            "error_message": current_msg or f"WIPS validation failure for PIRL {elem}",
+                            "current_value": val, "severity": "Error", "is_pre_check": False,
+                        })
+                        i += advance
+                        continue
                 i += 1
-
             if errors:
                 return errors
 
@@ -559,6 +625,15 @@ class PIRLParser:
             })
         return errors
 
+    def _row_context(self, row):
+        context = {}
+        for key, elem in (("entry_date", "900"), ("exit_date", "901"), ("state_code", "101"), ("school_status", "409"), ("employment_status", "400")):
+            idx = self.element_number_to_col_index.get(elem)
+            context[key] = str(row.iloc[idx]).strip() if idx is not None and idx < len(row) else ""
+        code = context["school_status"]
+        context["school_status_label"] = f"{code} - {SCHOOL_STATUS_CODES.get(code, 'Invalid code')}" if code else "(blank)"
+        return context
+
     def _link_errors_to_pirl(self):
         if self.pirl_df is None or self.pirl_df.empty:
             return
@@ -585,13 +660,22 @@ class PIRLParser:
                 r_num = int(err["row_number"])
                 if 1 <= r_num <= total_pirl_rows:
                     matched_row_idx = r_num - 1
-                elif 0 <= r_num < total_pirl_rows:
-                    matched_row_idx = r_num
+                if matched_row_idx is not None and err["uiid"] and uiid_col_idx is not None:
+                    if str(self.pirl_df.iat[matched_row_idx, uiid_col_idx]).strip() != err["uiid"].strip():
+                        matched_row_idx = None
 
             if matched_row_idx is None and err["uiid"]:
                 clean_uiid = err["uiid"].strip()
                 if clean_uiid in uiid_to_row_indices:
-                    matched_row_idx = uiid_to_row_indices[clean_uiid][0]
+                    candidates = uiid_to_row_indices[clean_uiid]
+                    # Row numbers from another file may be stale. Only fall back
+                    # when the participant/value identifies a single record.
+                    elem_match = re.search(r'\d+(?:-[A-Za-z]|[A-Za-z])?', err["element"])
+                    elem_idx = self.element_number_to_col_index.get(elem_match.group(0)) if elem_match else None
+                    if len(candidates) > 1 and elem_idx is not None:
+                        candidates = [r for r in candidates if str(self.pirl_df.iat[r, elem_idx]).strip() == err["current_value"].strip()]
+                    if len(candidates) == 1:
+                        matched_row_idx = candidates[0]
 
             err["pirl_row_index"] = matched_row_idx
 
@@ -612,12 +696,6 @@ class PIRLParser:
             err["element_col_name"] = element_col_name or raw_elem or "N/A"
             err["element_number"] = element_num_clean or raw_elem or "N/A"
 
-            idx_900 = self.element_number_to_col_index.get("900")
-            idx_901 = self.element_number_to_col_index.get("901")
-            idx_101 = self.element_number_to_col_index.get("101")
-            idx_409 = self.element_number_to_col_index.get("409")
-            idx_400 = self.element_number_to_col_index.get("400")
-
             if matched_row_idx is not None and self.pirl_df is not None:
                 row_data = self.pirl_df.iloc[matched_row_idx]
                 if not err["uiid"] and uiid_col_idx is not None and uiid_col_idx < len(row_data):
@@ -630,17 +708,14 @@ class PIRLParser:
                     if col_idx < len(row_data):
                         current_val = str(row_data.iloc[col_idx])
 
-                err["entry_date"] = str(row_data.iloc[idx_900]).strip() if idx_900 is not None and idx_900 < len(row_data) else ""
-                err["exit_date"] = str(row_data.iloc[idx_901]).strip() if idx_901 is not None and idx_901 < len(row_data) else ""
-                err["state_code"] = str(row_data.iloc[idx_101]).strip() if idx_101 is not None and idx_101 < len(row_data) else ""
-                err["school_status"] = str(row_data.iloc[idx_409]).strip() if idx_409 is not None and idx_409 < len(row_data) else ""
-                err["employment_status"] = str(row_data.iloc[idx_400]).strip() if idx_400 is not None and idx_400 < len(row_data) else ""
+                err.update(self._row_context(row_data))
             else:
                 err["entry_date"] = ""
                 err["exit_date"] = ""
                 err["state_code"] = ""
                 err["school_status"] = ""
                 err["employment_status"] = ""
+                err["school_status_label"] = "(blank)"
 
             err["current_value"] = current_val
             resolved_errors.append(err)
@@ -756,10 +831,12 @@ class PIRLParser:
 
         if isinstance(col_index_or_name, int):
             col_idx = col_index_or_name
-        elif col_key in self.element_number_to_col_index:
-            col_idx = self.element_number_to_col_index[col_key]
         elif col_key.isdigit() and int(col_key) < len(self.schema_columns):
             col_idx = int(col_key)
+        elif col_key.startswith("element:"):
+            col_idx = self.element_number_to_col_index.get(col_key.split(":", 1)[1])
+        elif col_key in self.element_number_to_col_index and not col_key.isdigit():
+            col_idx = self.element_number_to_col_index[col_key]
         else:
             for idx, c in enumerate(self.schema_columns):
                 if c.lower() == col_key:
@@ -769,28 +846,28 @@ class PIRLParser:
         if col_idx is None or col_idx < 0 or col_idx >= len(self.pirl_df.columns):
             return False
 
-        self.pirl_df.iat[pirl_row_index, col_idx] = str(new_value).strip()
+        value = str(new_value).strip()
+        if self.col_index_to_element_number.get(col_idx) == "409" and value and value not in SCHOOL_STATUS_CODES:
+            return False
+        if str(self.pirl_df.iat[pirl_row_index, col_idx]) == value:
+            return True
+        self.pirl_df.iat[pirl_row_index, col_idx] = value
         self.edits_count += 1
         
-        # Save updated data directly back to disk preserving exact CSV format
-        if self.loaded_filepath:
-            self.save_to_disk()
-
         # Re-run pre-validation & re-link errors
         self.run_pirl_pre_validation_checks()
         self._link_errors_to_pirl()
         return True
 
     def generate_headerless_pirl_csv(self) -> Tuple[bytes, str]:
-        if self.pirl_df is None:
-            df = pd.DataFrame()
-        else:
-            df = self.pirl_df
+        if self.pirl_df is None or self.pirl_df.empty:
+            raise ValueError("No PIRL dataset loaded to export.")
+        df = self.pirl_df
 
         buffer = io.StringIO()
-        df.to_csv(buffer, header=self.has_header, index=False, lineterminator='\n')
+        df.to_csv(buffer, header=False, index=False, lineterminator='\n')
         
-        filename = self.loaded_filename if self.loaded_filename else "wp_pirl.csv"
+        filename = f"wp_pirl_corrected_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         return buffer.getvalue().encode('utf-8'), filename
 
     def get_filtered_errors(self, query: str = "", element_filter: str = "", severity_filter: str = "", page: int = 1, page_size: int = 50, include_pre_checks: bool = True) -> Dict[str, Any]:
@@ -885,7 +962,15 @@ class PIRLParser:
             "top_failing_elements": top_elements,
             "top_error_codes": top_codes,
             "schema_loaded": len(self.schema_columns) > 0,
-            "schema_column_count": len(self.schema_columns)
+            "schema_column_count": len(self.schema_columns),
+            "schema_name": self.schema_name,
+            "schema_notice": self.schema_notice,
+            "loaded_filename": self.loaded_filename,
+            "loaded_filepath": self.loaded_filepath,
+            "edits_count": self.edits_count,
+            "unsaved_edits_count": self.edits_count - self.saved_edits_count,
+            "last_saved_path": self.last_saved_path,
+            "school_status_codes": SCHOOL_STATUS_CODES,
         }
 
     def get_full_record_details(self, pirl_row_index: int) -> Optional[Dict[str, Any]]:
@@ -922,7 +1007,9 @@ class PIRLParser:
                 "column_name": col_name,
                 "value": val,
                 "has_error": len(errs_for_field) > 0,
-                "errors": errs_for_field
+                "errors": errs_for_field,
+                "code_values": SCHOOL_STATUS_CODES if elem_num == "409" else {},
+                "help_text": "Choose the status at program entry from verified participant records." if elem_num == "409" else "Use YYYYMMDD. Every record for this participant must have the same verified date of birth." if elem_num == "200" else "",
             })
 
         return {
@@ -958,9 +1045,11 @@ class PIRLParser:
             training = "1" if i % 5 == 0 else "0"
             ssn = f"{random.randint(100,999)}-{random.randint(10,99)}-{random.randint(1000,9999)}"
 
-            row_data = [str(i), uiid, state_code, dob, sex, disability, veteran, "1", entry_date, training, ssn]
-            while len(row_data) < len(self.schema_columns):
-                row_data.append("")
+            row_data = [""] * len(self.schema_columns)
+            for elem, value in {"0": str(i), "100": uiid, "101": state_code, "200": dob, "201": sex, "202": disability, "300": veteran, "400": "1", "900": entry_date, "1300": training, "2700": ssn}.items():
+                col = self.element_number_to_col_index.get(elem)
+                if col is not None:
+                    row_data[col] = value
 
             demo_rows.append(row_data)
 
@@ -978,6 +1067,10 @@ class PIRLParser:
                 })
 
         self.pirl_df = pd.DataFrame(demo_rows, columns=self.schema_columns)
+        self.loaded_filepath = self.last_saved_path = None
+        self.loaded_filename = "demo_pirl.csv"
+        self.has_header = False
+        self.edits_count = self.saved_edits_count = 0
         self.errors_list = demo_errors
         self.run_pirl_pre_validation_checks()
         self._link_errors_to_pirl()

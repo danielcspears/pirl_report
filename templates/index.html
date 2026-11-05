@@ -724,12 +724,12 @@
                     <option value="dark">🌙 Dark Mode</option>
                     <option value="medium">🌗 Medium Mode</option>
                 </select>
-                <div class="badge-privacy">🔒 Local Memory Only</div>
+                <div class="badge-privacy">🔒 Processed Locally</div>
                 <div class="badge-schema" id="schemaBadge">📋 Schema: {{ schema_column_count }} Elements Mapped</div>
                 <div style="display:flex; gap:8px;">
-                    <button class="btn btn-secondary" onclick="saveFileToFolder()" title="Save changes directly back to your CSV file on disk in its original format">💾 Save to File</button>
-                    <button class="btn btn-secondary" onclick="exportPirlWithHeaders('xlsx')" title="Export full 495-column dataset with element header names for reporting">📊 Full Dataset (.xlsx)</button>
-                    <button class="btn btn-success" onclick="exportHeaderlessPirl()" title="Download corrected CSV file in exact original format">📥 Export WIPS File (wp_pirl.csv)</button>
+                    <button class="btn btn-secondary" onclick="saveFileToFolder()" title="Save corrections and show the full path to the saved CSV">💾 Save to File</button>
+                    <button class="btn btn-secondary" onclick="exportPirlWithHeaders('xlsx')" title="Export the full dataset with the matching schema headers for review">📊 Full Dataset (.xlsx)</button>
+                    <button class="btn btn-success" onclick="exportHeaderlessPirl()" title="Download the current corrected data without headers for WIPS">📥 Export WIPS File</button>
                 </div>
             </div>
         </header>
@@ -757,6 +757,19 @@
                 <button class="btn btn-secondary" id="uploadBtn" onclick="uploadFiles()">🚀 Load / Refresh Dataset</button>
             </div>
             <p id="datasetStatus" role="status" aria-live="polite" style="margin-top:12px; color:var(--text-muted);">No dataset loaded. Choose a PIRL CSV to load it automatically.</p>
+            <p id="saveStatus" role="status" aria-live="polite" style="margin-top:8px; color:var(--text-muted);"></p>
+            <details style="margin-top:12px;">
+                <summary>School Status at Program Entry (PIRL 409): code key</summary>
+                <ol style="margin:12px 24px; line-height:1.8;">
+                    <li>In school: secondary school or less</li>
+                    <li>In school: alternative school</li>
+                    <li>In school: postsecondary school</li>
+                    <li>Not attending school or secondary school dropout; beyond compulsory school age</li>
+                    <li>Not attending school; secondary school graduate or recognized equivalent</li>
+                    <li>Not attending school; within compulsory school age, without a diploma or equivalent</li>
+                </ol>
+                <p>Choose the status at program entry using verified participant records. Education level alone does not establish school attendance.</p>
+            </details>
         </div>
 
         <!-- Mode Switcher -->
@@ -916,6 +929,7 @@
                 <button class="modal-tab" id="tabAllFields" onclick="setModalTab('all')">All Mapped PIRL Fields (<span id="modalAllCount">0</span>)</button>
             </div>
             <div class="modal-body">
+                <input type="search" id="fieldSearch" placeholder="Find element, e.g. 409 or Date of Birth" oninput="renderModalFields()" style="width:100%; margin-bottom:12px; padding:8px;">
                 <div class="fields-grid" id="modalFieldsGrid"></div>
             </div>
         </div>
@@ -999,6 +1013,7 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
         }
 
         async function performUpload() {
+            if (!await savePendingEdits()) return null;
             const pirlInput = document.getElementById('pirlFileInput');
             const errorInput = document.getElementById('errorFileInput');
             const schemaInput = document.getElementById('schemaFileInput');
@@ -1018,6 +1033,9 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
                 const res = await fetch('/api/upload', { method: 'POST', body: formData });
                 const data = await res.json().catch(() => { throw new Error('The server could not read the CSV. Check the server terminal for details.'); });
                 if (!res.ok) throw new Error(data.detail || 'The dataset could not be loaded.');
+                if (data.pirl_records_processed !== undefined && pirlInput) pirlInput.value = '';
+                if (schemaInput) schemaInput.value = '';
+                if (errorInput) errorInput.value = '';
                 updateStats(data.stats);
                 currentPage = 1;
                 if (data.pirl_records_processed !== undefined) {
@@ -1028,6 +1046,7 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
                 setDatasetStatus(datasetLoaded
                     ? `Loaded ${data.stats.total_pirl_records.toLocaleString()} PIRL records${data.pirl_filename ? ' from ' + data.pirl_filename : ''}.`
                     : 'Schema loaded. Choose a PIRL Data File to load participant records.');
+                if (data.stats.schema_notice) setDatasetStatus(data.stats.schema_notice);
                 return data;
             } catch (err) {
                 setDatasetStatus(`Dataset load failed: ${err.message}`, true);
@@ -1072,7 +1091,8 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
             
             setElText('countErrorsBadge', (stats.total_errors || 0).toLocaleString());
             setElText('countRecordsBadge', (stats.total_pirl_records || 0).toLocaleString());
-            setElText('schemaBadge', `📋 Schema: ${stats.schema_column_count || 0} Elements Mapped`);
+            setElText('schemaBadge', `📋 ${stats.schema_name || 'Schema'}: ${stats.schema_column_count || 0} columns`);
+            setElText('saveStatus', `${stats.edits_count || 0} correction(s) this session. ${stats.last_saved_path ? 'Last saved to: ' + stats.last_saved_path : 'Uploaded files are saved as a corrected copy in the app folder; Export WIPS File downloads a copy to your computer.'}`);
         }
 
         function switchViewMode(mode) {
@@ -1140,15 +1160,16 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
             }
 
             // Extract primary rule message (e.g. Rule 200) to show ONCE in the top banner
-            const primaryRule = data.errors[0].error_message || "Validation Error";
-            const primaryCode = data.errors[0].error_code || "WIPS_ERR";
+            const rules = new Map(data.errors.map(e => [e.error_code, e.error_message]));
+            const primaryRule = rules.size === 1 ? data.errors[0].error_message : 'Multiple validation rules are shown. Filter by PIRL element to review one rule.';
+            const primaryCode = rules.size === 1 ? data.errors[0].error_code : `${rules.size} rules on this page`;
             if (ruleBanner) {
                 ruleBanner.style.display = 'block';
                 setElText('ruleCodeBadge', primaryCode);
                 setElText('ruleTextDescription', primaryRule);
                 
                 const uniqueUiids = new Set(data.errors.map(e => e.uiid).filter(Boolean));
-                setElText('ruleGroupCount', `${uniqueUiids.size} Participant Pair(s) (${data.total_errors} Rows Total)`);
+                setElText('ruleGroupCount', `${uniqueUiids.size} participant(s) on this page (${data.total_errors} issues total)`);
             }
 
             if (thead) {
@@ -1204,9 +1225,7 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
                         `background: rgba(239, 68, 68, 0.2); color: #f87171; font-weight: 700; border: 1px solid rgba(239,68,68,0.4); padding: 3px 8px; border-radius: 4px; display: inline-block; font-family: monospace;` :
                         `background: rgba(245, 158, 11, 0.2); color: #fbbf24; font-weight: 700; border: 1px solid rgba(245,158,11,0.4); padding: 3px 8px; border-radius: 4px; display: inline-block; font-family: monospace;`;
 
-                    const schoolStatusLabel = err.school_status ? 
-                        (err.school_status === '5' ? '5 - Sec. Grad' : err.school_status === '1' ? '1 - Attending' : 'Code ' + err.school_status) : 
-                        '<span style="color:var(--text-muted);">(blank)</span>';
+                    const schoolStatusLabel = escapeHtml(err.school_status_label || err.school_status || '(blank)');
 
                     htmlRows.push(`
                         <tr class="has-error-row" style="background: ${groupBg};">
@@ -1331,6 +1350,7 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
                 const res = await fetch(`/api/record/${pirlRowIndex}`);
                 if (!res.ok) return alert("Could not load record details.");
                 currentRecordData = await res.json();
+                document.getElementById('fieldSearch').value = '';
                 
                 setElText('modalTitle', `Record #${currentRecordData.row_number_display} Inspector`);
                 setElText('modalSubTitle', `Unique Individual Identifier: ${currentRecordData.uiid || 'N/A'}`);
@@ -1365,9 +1385,11 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
             const grid = document.getElementById('modalFieldsGrid');
             if (!grid) return;
             
-            const fieldsToDisplay = activeModalTab === 'errors' ? 
+            const candidates = activeModalTab === 'errors' ?
                 currentRecordData.fields.filter(f => f.has_error) : 
                 currentRecordData.fields;
+            const search = getElValue('fieldSearch').toLowerCase().trim();
+            const fieldsToDisplay = candidates.filter(f => !search || f.column_name.toLowerCase().includes(search) || f.element_number === search);
 
             if (fieldsToDisplay.length === 0) {
                 grid.innerHTML = `<div class="empty-state" style="grid-column: 1/-1;">No failing fields found for this record.</div>`;
@@ -1380,19 +1402,40 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
                         <span>Col #${f.col_index + 1} (Elem ${f.element_number})</span>
                         ${f.has_error ? '<span style="color:var(--danger); font-weight:bold;">⚠️ Error</span>' : ''}
                     </div>
-                    <div class="field-name">${f.column_name}</div>
+                    <div class="field-name">${escapeHtml(f.column_name)}</div>
                     <div class="field-val-container" style="display:flex; gap:6px; align-items:center;">
-                        <input type="text" class="field-input" id="fieldInput_${f.col_index}" value="${f.value}" style="flex:1;">
+                        ${renderFieldInput(f)}
                         <button class="btn-secondary" style="padding:4px 8px; font-size:0.78rem;" onclick="pasteToFieldInput(${f.col_index})" title="Paste last copied value into input box">📋 Paste</button>
                         <button class="btn-secondary" style="padding:4px 8px; font-size:0.78rem; background:rgba(37,99,235,0.2); color:#60a5fa; border:1px solid rgba(59,130,246,0.4);" onclick="pasteAndSaveCell(${currentRecordData.pirl_row_index}, ${f.col_index})" title="Paste copied value and save directly to file">⚡ Paste & Save</button>
                         <button class="btn-save-cell" onclick="saveCellChange(${currentRecordData.pirl_row_index}, ${f.col_index})">💾 Save</button>
                     </div>
+                    ${f.help_text ? `<p style="font-size:0.8rem; color:var(--text-muted); margin-top:6px;">${escapeHtml(f.help_text)}</p>` : ''}
                     ${f.errors.map(e => `<div class="field-error-msg"><strong>[${e.error_code}]</strong> ${e.error_message}</div>`).join('')}
                 </div>
             `).join('');
         }
 
         let lastCopiedValue = "";
+        const pendingCellEdits = new Map();
+        let cellSavePromise = null;
+
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+        }
+
+        function rememberCellEdit(row, col, value) {
+            pendingCellEdits.set(`${row}:${col}`, {pirl_row_index: row, col_index: col, new_value: value});
+        }
+
+        function renderFieldInput(f) {
+            const row = currentRecordData.pirl_row_index;
+            const value = pendingCellEdits.get(`${row}:${f.col_index}`)?.new_value ?? f.value;
+            const attrs = `class="field-input" id="fieldInput_${f.col_index}" style="flex:1; min-width:0;" oninput="rememberCellEdit(${row}, ${f.col_index}, this.value)"`;
+            if (Object.keys(f.code_values || {}).length) {
+                return `<select ${attrs}><option value="">(blank — choose a verified status)</option>${value && !f.code_values[value] ? `<option selected value="${escapeHtml(value)}">${escapeHtml(value)} — invalid code</option>` : ''}${Object.entries(f.code_values).map(([code,label]) => `<option value="${code}" ${value === code ? 'selected' : ''}>${code} — ${escapeHtml(label)}</option>`).join('')}</select>`;
+            }
+            return `<input type="text" ${attrs} value="${escapeHtml(value)}">`;
+        }
 
         function copyValueToClipboard(val) {
             if (!val) return;
@@ -1401,25 +1444,28 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
             alert(`📋 Copied value "${val}"!\nClick "📋 Paste" or "⚡ Paste & Save" on the row you want to correct.`);
         }
 
-        function pasteToFieldInput(colIndex) {
+        async function pasteToFieldInput(colIndex) {
             const input = document.getElementById(`fieldInput_${colIndex}`);
             if (!input) return;
             if (lastCopiedValue) {
                 input.value = lastCopiedValue;
             } else {
-                navigator.clipboard.readText().then(t => {
-                    if (t) input.value = t.trim();
-                }).catch(() => alert("Please click '📋 Copy' on a valid value first."));
+                try {
+                    const text = await navigator.clipboard.readText();
+                    if (text) input.value = text.trim();
+                } catch { alert("Please click '📋 Copy' on a valid value first."); }
             }
+            rememberCellEdit(currentRecordData.pirl_row_index, colIndex, input.value);
         }
 
         async function pasteAndSaveCell(pirlRowIndex, colIndex) {
-            pasteToFieldInput(colIndex);
+            await pasteToFieldInput(colIndex);
             await saveCellChange(pirlRowIndex, colIndex);
         }
 
         async function runPreflightCheck() {
             try {
+                if (!await savePendingEdits()) return;
                 if (datasetLoadPromise) {
                     if (!await datasetLoadPromise) return;
                 }
@@ -1443,30 +1489,48 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
         async function saveCellChange(pirlRowIndex, colIndex) {
             const input = document.getElementById(`fieldInput_${colIndex}`);
             if (!input) return;
-            const newVal = input.value;
+            rememberCellEdit(pirlRowIndex, colIndex, input.value);
+            if (!await savePendingEdits()) return;
+            await inspectRecord(pirlRowIndex);
+            await fetchCurrentViewData();
+        }
 
+        async function savePendingEdits() {
+            if (cellSavePromise) return cellSavePromise;
+            cellSavePromise = flushCellEdits().finally(() => { cellSavePromise = null; });
+            return cellSavePromise;
+        }
+
+        async function flushCellEdits() {
             try {
-                const res = await fetch('/api/cell-update', {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ pirl_row_index: pirlRowIndex, col_name_or_index: String(colIndex), new_value: newVal })
-                });
-
-                if (!res.ok) return alert("Failed to save cell change.");
-                const data = await res.json();
-                updateStats(data.stats);
-                alert(`✅ Saved column #${colIndex + 1}! (${data.save_message || 'Original CSV format preserved as-is'}).`);
-                await inspectRecord(pirlRowIndex);
-                await fetchCurrentViewData();
-            } catch (err) { alert("Error saving cell change: " + err); }
+                while (pendingCellEdits.size) {
+                    const [key, edit] = pendingCellEdits.entries().next().value;
+                    const res = await fetch('/api/cell-update', {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(edit)
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.detail || 'Failed to save cell change.');
+                    if (pendingCellEdits.get(key) === edit) pendingCellEdits.delete(key);
+                    updateStats(data.stats);
+                    if (!data.disk_saved) {
+                        setElText('saveStatus', `Correction is in memory. Disk save failed: ${data.save_message}. Export WIPS File to download it.`);
+                        alert(`Correction is in memory, but disk save failed: ${data.save_message}. Export WIPS File to download your corrections.`);
+                    }
+                }
+                return true;
+            } catch (err) { alert('Error saving correction: ' + err.message); return false; }
         }
 
         async function saveFileToFolder() {
             try {
+                if (!await savePendingEdits()) return;
                 const res = await fetch('/api/save-file', { method: 'POST' });
                 const data = await res.json();
+                updateStats(data.stats);
                 if (data.status === 'success') {
-                    alert(`✅ ${data.message} (Original CSV format preserved as-is!)`);
+                    alert(`✅ ${data.message}`);
                 } else {
                     alert(`⚠️ ${data.message}`);
                 }
@@ -1511,11 +1575,13 @@ Record #12 UIID WIOA-2026012 Element 900 Date of Program Entry missing"></textar
             window.location.href = `/api/export-errors?query=${encodeURIComponent(q)}&element=${encodeURIComponent(elem)}&severity=${encodeURIComponent(sev)}&format=${format}`;
         }
 
-        function exportPirlWithHeaders(format) {
+        async function exportPirlWithHeaders(format) {
+            if (!await savePendingEdits()) return;
             window.location.href = `/api/export-pirl-headers?format=${format}`;
         }
 
-        function exportHeaderlessPirl() {
+        async function exportHeaderlessPirl() {
+            if (!await savePendingEdits()) return;
             window.location.href = `/api/export-headerless-pirl`;
         }
 

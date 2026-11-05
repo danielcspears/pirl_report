@@ -7,6 +7,7 @@ cell editing, and headerless CSV exports.
 
 import os
 import io
+import csv
 from datetime import datetime
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, Query, Request, HTTPException, Form, Body
@@ -15,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from typing import Optional, List
-from pirl_parser import PIRLParser
+from pirl_parser import PIRLParser, SCHOOL_STATUS_CODES
 
 app = FastAPI(title="PIRL DOL Error Report Inspector", version="1.0.0")
 
@@ -26,7 +27,7 @@ os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-DEFAULT_SCHEMA_PATH = "PIRL Schema Header.csv" if os.path.exists("PIRL Schema Header.csv") else None
+DEFAULT_SCHEMA_PATH = next((p for p in ("PIRLSchemaHeader2025.csv", "PIRL Schema Header.csv") if os.path.exists(p)), None)
 parser = PIRLParser(schema_header_path=DEFAULT_SCHEMA_PATH)
 
 class PasteErrorRequest(BaseModel):
@@ -34,7 +35,8 @@ class PasteErrorRequest(BaseModel):
 
 class CellUpdateRequest(BaseModel):
     pirl_row_index: int
-    col_name_or_index: str
+    col_index: Optional[int] = None
+    col_name_or_index: Optional[str] = None
     new_value: str
 
 @app.get("/", response_class=HTMLResponse)
@@ -55,7 +57,9 @@ async def get_schema_info():
     return {
         "loaded": len(parser.schema_columns) > 0,
         "count": len(parser.schema_columns),
-        "columns": parser.schema_columns
+        "columns": parser.schema_columns,
+        "schema_name": parser.schema_name,
+        "school_status_codes": SCHOOL_STATUS_CODES,
     }
 
 @app.post("/api/upload")
@@ -67,21 +71,24 @@ async def upload_files(
     """Processes uploaded PIRL Data, DOL Error Reports, and/or PIRL Schema Header files."""
     results = {}
 
+    old_schema = (list(parser.schema_columns), parser.schema_name)
     if schema_file and schema_file.filename:
         schema_bytes = await schema_file.read()
-        cols = parser.load_schema_header(io.BytesIO(schema_bytes))
+        try:
+            cols = parser.load_schema_header(io.BytesIO(schema_bytes), allow_layout_change=bool(pirl_file and pirl_file.filename))
+        except (ValueError, UnicodeError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         results["schema_columns_count"] = len(cols)
-    elif not parser.schema_columns and os.path.exists("PIRL Schema Header.csv"):
-        parser.load_schema_header("PIRL Schema Header.csv")
 
     if pirl_file and pirl_file.filename:
         pirl_bytes = await pirl_file.read()
         try:
             records_count = parser.parse_pirl_data(pirl_bytes, pirl_file.filename)
-        except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeError) as exc:
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, UnicodeError, csv.Error, ValueError) as exc:
+            parser._set_schema(*old_schema)
             raise HTTPException(
                 status_code=422,
-                detail="Could not read the PIRL CSV. Use a comma-separated UTF-8 CSV with consistent columns."
+                detail=f"Could not read the PIRL CSV. {exc}"
             ) from exc
         if records_count == 0:
             raise HTTPException(status_code=422, detail="The PIRL CSV contains no data rows.")
@@ -183,7 +190,8 @@ async def get_record_details(row_index: int):
 @app.put("/api/cell-update")
 async def update_cell(payload: CellUpdateRequest):
     """Updates a cell value in the PIRL dataframe in memory and saves directly back to file in folder."""
-    success = parser.update_cell_value(payload.pirl_row_index, payload.col_name_or_index, payload.new_value)
+    column = payload.col_index if payload.col_index is not None else payload.col_name_or_index
+    success = parser.update_cell_value(payload.pirl_row_index, column, payload.new_value)
     if not success:
         raise HTTPException(status_code=400, detail="Could not update cell value. Check row index or column name.")
     
@@ -191,11 +199,11 @@ async def update_cell(payload: CellUpdateRequest):
     return {
         "status": "success",
         "row_index": payload.pirl_row_index,
-        "col": payload.col_name_or_index,
+        "col": column,
         "new_value": payload.new_value,
         "disk_saved": saved_disk,
         "save_message": msg,
-        "loaded_file": parser.loaded_filepath or parser.loaded_filename,
+        "loaded_file": parser.last_saved_path,
         "stats": parser.get_stats()
     }
 
@@ -206,18 +214,21 @@ async def save_file_to_disk():
     return {
         "status": "success" if saved_disk else "error",
         "message": msg,
-        "loaded_file": parser.loaded_filepath or parser.loaded_filename,
+        "loaded_file": parser.last_saved_path,
         "stats": parser.get_stats()
     }
 
 @app.get("/api/export-headerless-pirl")
 async def export_headerless_pirl():
     """Exports the modified PIRL dataset as a headerless CSV file formatted for WIPS upload (wp_pirl_{date}.csv)."""
-    csv_bytes, filename = parser.generate_headerless_pirl_csv()
+    try:
+        csv_bytes, filename = parser.generate_headerless_pirl_csv()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return StreamingResponse(
         io.BytesIO(csv_bytes),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"}
+        headers={"Content-Disposition": f"attachment; filename={filename}", "Cache-Control": "no-store"}
     )
 
 @app.post("/api/demo")
@@ -248,7 +259,7 @@ async def export_errors(
     export_data = []
     for e in errs:
         school_st = e.get("school_status", "")
-        school_label = "5 - Sec. Grad" if school_st == "5" else ("1 - Attending" if school_st == "1" else f"Code {school_st}" if school_st else "")
+        school_label = f"{school_st} - {SCHOOL_STATUS_CODES.get(school_st, 'Invalid code')}" if school_st else "(blank)"
 
         export_data.append({
             "PIRL Row #": e.get("row_number", ""),
@@ -356,7 +367,7 @@ async def export_errors(
             r_border = group_top_b if (prev_uiid is not None and uiid != prev_uiid) else thin_b
 
             school_st = e.get("school_status", "")
-            school_label = "5 - Sec. Grad" if school_st == "5" else ("1 - Attending" if school_st == "1" else f"Code {school_st}" if school_st else "")
+            school_label = f"{school_st} - {SCHOOL_STATUS_CODES.get(school_st, 'Invalid code')}" if school_st else "(blank)"
 
             row_vals = [
                 e.get("row_number", ""),
@@ -439,7 +450,7 @@ async def export_errors(
 
 @app.get("/api/export-pirl-headers")
 async def export_pirl_headers(format: str = Query("csv", pattern="^(csv|xlsx)$")):
-    """Exports the reconstructed PIRL dataset with full 495 column headers as CSV or Excel file download."""
+    """Exports every row with headers from the active schema for review."""
     if parser.pirl_df is None or parser.pirl_df.empty:
         raise HTTPException(status_code=400, detail="No PIRL data loaded to export.")
 
@@ -450,9 +461,14 @@ async def export_pirl_headers(format: str = Query("csv", pattern="^(csv|xlsx)$")
     date_str = datetime.now().strftime("%Y%m%d")
 
     if format == "xlsx":
+        from openpyxl import Workbook
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df_export.head(50000).to_excel(writer, index=False, sheet_name="PIRL Reconstructed")
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet("PIRL Reconstructed")
+        ws.append(list(df_export.columns))
+        for row in df_export.itertuples(index=False, name=None):
+            ws.append(row)
+        wb.save(output)
         output.seek(0)
         return StreamingResponse(
             output,
